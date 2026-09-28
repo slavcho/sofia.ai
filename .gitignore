@@ -1,0 +1,6 @@
+# Downloaded data lives on the NAS (data -> smb://slavi-nas.local/urbandata)
+data
+__pycache__/
+*.pyc
+.venv/
+logs/
