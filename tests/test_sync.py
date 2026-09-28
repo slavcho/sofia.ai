@@ -107,5 +107,35 @@ class MultiUrlResourceTest(unittest.TestCase):
         self.assertNotIn("parts", meta)
 
 
+class DatasetJsonTest(unittest.TestCase):
+    # Rewriting all 344 dataset.json files on every run is slow over the NAS mount.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.pkg = {"id": "pkg-1", "name": "bus-lines", "metadata_modified": "2026-01-01T00:00:00"}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_written_when_missing(self):
+        self.assertTrue(sync.write_dataset_json(self.pkg, self.dir, {"pkg-1": dict(self.pkg)}))
+        self.assertEqual(sync.load_json(self.dir / "dataset.json"), self.pkg)
+
+    def test_skipped_when_unchanged(self):
+        sync.save_json(self.dir / "dataset.json", self.pkg)
+        self.assertFalse(sync.write_dataset_json(self.pkg, self.dir, {"pkg-1": dict(self.pkg)}))
+
+    def test_written_when_modified(self):
+        sync.save_json(self.dir / "dataset.json", self.pkg)
+        newer = dict(self.pkg, metadata_modified="2026-02-01T00:00:00")
+        self.assertTrue(sync.write_dataset_json(newer, self.dir, {"pkg-1": self.pkg}))
+        self.assertEqual(sync.load_json(self.dir / "dataset.json"), newer)
+
+    def test_written_when_new_on_portal(self):
+        sync.save_json(self.dir / "dataset.json", {"stale": True})
+        self.assertTrue(sync.write_dataset_json(self.pkg, self.dir, {}))
+        self.assertEqual(sync.load_json(self.dir / "dataset.json"), self.pkg)
+
+
 if __name__ == "__main__":
     unittest.main()

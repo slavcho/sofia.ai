@@ -104,15 +104,16 @@ def fetch_catalog(s):
     return packages, orgs, groups
 
 
+def load_previous_catalog(data_dir):
+    return load_json(data_dir / "_catalog" / "latest" / "packages.json") or []
+
+
 def snapshot_catalog(data_dir, packages, orgs, groups):
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    latest = data_dir / "_catalog" / "latest"
-    previous = load_json(latest / "packages.json") or []
-    for d in (data_dir / "_catalog" / stamp, latest):
+    for d in (data_dir / "_catalog" / stamp, data_dir / "_catalog" / "latest"):
         save_json(d / "packages.json", packages)
         save_json(d / "organizations.json", orgs)
         save_json(d / "groups.json", groups)
-    return previous
 
 
 def report_catalog_diff(previous, packages):
@@ -174,6 +175,20 @@ def meta_files(meta):
     if meta.get("parts"):
         return [p["file"] for p in meta["parts"]]
     return [meta["file"]] if meta.get("file") else []
+
+
+def write_dataset_json(pkg, pkg_dir, previous_by_id):
+    """Write dataset.json only if it is new/changed since the last catalog snapshot.
+
+    Rewriting all of them every run is slow over the NAS mount. The snapshot is
+    saved only after this loop, so a crashed run cannot leave stale files behind.
+    """
+    prev = previous_by_id.get(pkg["id"])
+    path = pkg_dir / "dataset.json"
+    if prev and prev.get("metadata_modified") == pkg.get("metadata_modified") and path.exists():
+        return False
+    save_json(path, pkg)
+    return True
 
 
 def needs_download(res, pkg_dir, meta, force):
@@ -354,16 +369,17 @@ def main():
 
     log("fetching catalog ...")
     packages, orgs, groups = fetch_catalog(s)
-    previous = snapshot_catalog(data_dir, packages, orgs, groups)
+    previous = load_previous_catalog(data_dir)
     log(f"{len(packages)} datasets, {sum(len(p['resources']) for p in packages)} resources, "
         f"{len(orgs)} organizations, {len(groups)} groups")
     report_catalog_diff(previous, packages)
 
-    jobs, rows = [], {}
+    jobs, rows, written = [], {}, 0
+    previous_by_id = {p["id"]: p for p in previous}
     for pkg in packages:
         section = section_of(pkg)
         pkg_dir = data_dir / section / pkg["name"]
-        save_json(pkg_dir / "dataset.json", pkg)
+        written += write_dataset_json(pkg, pkg_dir, previous_by_id)
         for res in pkg["resources"]:
             meta = load_json(pkg_dir / f"{res['id']}.meta.json")
             rows[res["id"]] = (pkg, section, res, meta or {})
@@ -371,6 +387,9 @@ def main():
                 continue
             if not args.only_meta and needs_download(res, pkg_dir, meta, args.force):
                 jobs.append((pkg_dir, res))
+
+    snapshot_catalog(data_dir, packages, orgs, groups)
+    log(f"{written} dataset.json written, {len(packages) - written} unchanged")
 
     # Small/known-size files first so useful data lands early; unknown sizes are
     # mostly GeoJSON from api.sofiaplan.bg and go in the middle.
