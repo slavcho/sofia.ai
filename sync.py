@@ -161,11 +161,26 @@ def filename_from(resp):
     return safe_name(base) if base else "file"
 
 
+def split_urls(text):
+    """A resource URL field sometimes holds several URLs ("https://a/1, https://a/2")."""
+    parts = [p for p in re.split(r"[,\s]+", text.strip()) if p]
+    if len(parts) > 1 and all(re.match(r"https?://", p) for p in parts):
+        return parts
+    return [text.strip()]
+
+
+def meta_files(meta):
+    """Local file names a finished resource consists of."""
+    if meta.get("parts"):
+        return [p["file"] for p in meta["parts"]]
+    return [meta["file"]] if meta.get("file") else []
+
+
 def needs_download(res, pkg_dir, meta, force):
     # "skipped-too-large" is retried every run: the size limit may be different now.
     if force or not meta or meta.get("status") not in ("ok", "link"):
         return True
-    if meta["status"] == "ok" and not (pkg_dir / meta["file"]).exists():
+    if meta["status"] == "ok" and not all((pkg_dir / f).exists() for f in meta_files(meta)):
         return True
     ck = meta.get("ckan", {})
     return any(ck.get(k) != res.get(k) for k in ("url", "metadata_modified", "last_modified"))
@@ -204,15 +219,15 @@ def fetch_to_part(s, url, pkg_dir, res_id, max_size, meta):
     return fname, size, h.hexdigest()
 
 
-def fetch_with_retries(s, res, pkg_dir, max_size, meta):
+def fetch_with_retries(s, url, res, pkg_dir, max_size, meta):
     for attempt in range(RETRIES):
         try:
-            return fetch_to_part(s, res["url"], pkg_dir, res["id"], max_size, meta)
+            return fetch_to_part(s, url, pkg_dir, res["id"], max_size, meta)
         except (requests.RequestException, IOError) as e:
             code = getattr(getattr(e, "response", None), "status_code", None)
             if attempt == RETRIES - 1 or (code and 400 <= code < 500):
                 raise  # out of retries, or a client error that retrying will not fix
-            log(f"  retry {attempt + 1} {res['url']}: {e}")
+            log(f"  retry {attempt + 1} {url}: {e}")
             time.sleep(10 * (attempt + 1))
 
 
@@ -233,8 +248,12 @@ def sync_resource(s, res, pkg_dir, max_size):
         save_json(meta_path, meta)
         return meta
 
+    urls = split_urls(res["url"])
+    if len(urls) > 1:
+        return sync_multi_resource(s, res, urls, pkg_dir, max_size, meta, old, meta_path)
+
     try:
-        fname, size, sha = fetch_with_retries(s, res, pkg_dir, max_size, meta)
+        fname, size, sha = fetch_with_retries(s, urls[0], res, pkg_dir, max_size, meta)
     except Skip as sk:
         meta.update(status=sk.status, **sk.extra)
         save_json(meta_path, meta)
@@ -254,6 +273,43 @@ def sync_resource(s, res, pkg_dir, max_size):
         meta["history"].append({k: old.get(k) for k in ("sha256", "size", "downloaded_at")})
     meta.update(status="ok", file=fname, size=size, sha256=sha, downloaded_at=now_iso(),
                 content_changed=changed if old.get("sha256") else None)
+    save_json(meta_path, meta)
+    return meta
+
+
+def sync_multi_resource(s, res, urls, pkg_dir, max_size, meta, old, meta_path):
+    """One CKAN resource pointing at several files: all parts must succeed."""
+    parts = []
+    for url in urls:
+        part = {"url": url}
+        try:
+            fname, size, sha = fetch_with_retries(s, url, res, pkg_dir, max_size, part)
+        except Skip as sk:
+            meta.update(status=sk.status, parts=parts + [part], **sk.extra)
+            save_json(meta_path, meta)
+            return meta
+        except (requests.RequestException, IOError) as e:
+            meta.update(status="error", parts=parts + [part],
+                        error=f"{type(e).__name__}: {url}: {e}"[:500])
+            save_json(meta_path, meta)
+            return meta
+        part.update(file=fname, size=size, sha256=sha)
+        parts.append(part)
+
+    new_files = {p["file"] for p in parts}
+    for f in set(meta_files(old)) - new_files:
+        (pkg_dir / f).unlink(missing_ok=True)
+    for p in parts:
+        os.replace(pkg_dir / (p["file"] + ".part"), pkg_dir / p["file"])
+    old_shas = [p.get("sha256") for p in old.get("parts", [])]
+    new_shas = [p["sha256"] for p in parts]
+    changed = bool(old_shas) and old_shas != new_shas
+    if changed:
+        meta["history"].append({"parts": [{k: p.get(k) for k in ("url", "sha256", "size")}
+                                          for p in old["parts"]],
+                                "downloaded_at": old.get("downloaded_at")})
+    meta.update(status="ok", parts=parts, size=sum(p["size"] for p in parts),
+                downloaded_at=now_iso(), content_changed=changed if old_shas else None)
     save_json(meta_path, meta)
     return meta
 
@@ -373,7 +429,7 @@ def index_row(pkg, section, res, meta):
         "status": meta.get("status", "not-fetched"),
         "size": meta.get("size"),
         "sha256": meta.get("sha256"),
-        "file": f"{section}/{pkg['name']}/{meta['file']}" if meta.get("file") else "",
+        "file": ";".join(f"{section}/{pkg['name']}/{f}" for f in meta_files(meta)),
         "url": res["url"],
         "downloaded_at": meta.get("downloaded_at"),
         "error": meta.get("error"),
