@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
 """Load the mirrored urbandata.sofia.bg files into PostGIS (see db/schema.sql).
 
-  python3 load_db.py                      # catalog + every GeoJSON layer
+  python3 load_db.py                      # catalog + every GeoJSON/CSV/Excel/JSON layer
   python3 load_db.py --dataset bus-lines  # only these datasets (repeatable)
   python3 load_db.py --only-catalog       # datasets/resources tables only
   python3 load_db.py --force              # reload layers even if unchanged
 
 Connection: --dsn or $DATABASE_URL, else host 127.0.0.1, database urbandata,
-user urbanuser; PG* environment variables override those, and the password
-comes from ~/.pgpass.
+user urbanuser; the password comes from ~/.pgpass. (127.0.0.1, not localhost:
+.pgpass matches the host name literally.)
 
 A layer is reloaded only when the sha256 of its source file changed. Every
 layer loads in its own transaction, so one broken file does not stop the run.
 """
 import argparse
+import csv
+import datetime as dt
+import io
+import json
 import os
+import re
 import sys
 import time
 from collections import Counter
 from pathlib import Path
 
+import openpyxl
 import psycopg
+import xlrd
 from psycopg.types.json import Jsonb
 
 import sync
@@ -121,15 +128,18 @@ def resource_row(pkg, res, meta):
 
 
 def resource_layers(meta, rel_dir):
-    """(path relative to the data dir, sha256) of every GeoJSON file of a resource."""
+    """(path relative to the data dir, sha256) of every loadable file of a resource."""
     if meta.get("status") != "ok":
         return []
     parts = meta.get("parts") or [meta]
     return [(f"{rel_dir}/{p['file']}", p.get("sha256")) for p in parts
-            if p.get("file", "").lower().endswith(".geojson")]
+            if os.path.splitext(p.get("file", ""))[1].lower() in READERS]
 
 
-# ---- GeoJSON parsing ------------------------------------------------------
+# ---- parsing --------------------------------------------------------------
+#
+# Every reader turns a file into [(source_path suffix, rows)], one entry per
+# layer (a workbook has one per sheet), rows being (source_fid, properties, geometry).
 
 JSON_TYPES = [(bool, "boolean"), ((int, float), "number"), (str, "string"),
               (dict, "object"), (list, "array"), (type(None), "null")]
@@ -162,7 +172,7 @@ class LayerStats:
         return {k: "|".join(sorted(v)) for k, v in self.fields.items()}
 
 
-def feature_rows(doc, stats):
+def feature_rows(doc):
     """Yield (source_fid, properties, geometry) for each feature of a FeatureCollection."""
     if not isinstance(doc, dict) or doc.get("type") != "FeatureCollection":
         raise ValueError(f"not a GeoJSON FeatureCollection: {type(doc).__name__}")
@@ -170,11 +180,131 @@ def feature_rows(doc, stats):
     if crs and not crs.endswith(("CRS84", "4326")):
         raise ValueError(f"unsupported CRS {crs}")
     for i, ft in enumerate(doc.get("features") or []):
-        props = ft.get("properties") or {}
-        geom = ft.get("geometry") or None
-        stats.add(props, geom)
         fid = ft.get("id")
-        yield (str(fid) if fid is not None else str(i)), props, geom
+        yield (str(fid) if fid is not None else str(i)), ft.get("properties") or {}, ft.get("geometry") or None
+
+
+# Column names seen on the portal: lat, latitude, "Latitude (географска ширина)",
+# long, longitude and the misspelled "Longtitude (географска дължина)".
+LAT_RE = re.compile(r"^lat(itude)?\b|ширина", re.I)
+LON_RE = re.compile(r"^(lon|lng|long|longitude|longtitude)\b|дължина", re.I)
+
+
+def coord_columns(names):
+    lat = next((n for n in names if LAT_RE.search(n.strip())), None)
+    lon = next((n for n in names if LON_RE.search(n.strip())), None)
+    return lat, lon
+
+
+def to_float(v):
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip().replace(",", "."))
+    except ValueError:
+        return None
+
+
+def point(lat, lon):
+    if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180) or (lat, lon) == (0, 0):
+        return None
+    return {"type": "Point", "coordinates": [lon, lat]}
+
+
+def cell(v):
+    if isinstance(v, (dt.date, dt.time)):
+        return v.isoformat()
+    if isinstance(v, float) and v.is_integer():
+        return int(v)  # Excel stores every number as a float: 133950.0 -> 133950
+    if v == "":
+        return None
+    return v
+
+
+def dict_rows(records):
+    """Rows of a table given as dicts; a point geometry when there are lat/long columns."""
+    lat, lon = coord_columns(list(records[0])) if records and isinstance(records[0], dict) else (None, None)
+    for i, rec in enumerate(records, 1):
+        props = rec if isinstance(rec, dict) else {"value": rec}
+        geom = point(to_float(props.get(lat)), to_float(props.get(lon))) if lat and lon else None
+        yield str(i), props, geom
+
+
+def clean_header(header):
+    names, seen = [], Counter()
+    for j, h in enumerate(header, 1):
+        name = str(h).strip() if h is not None else ""
+        name = name or f"col_{j}"
+        seen[name] += 1
+        names.append(name if seen[name] == 1 else f"{name}_{seen[name]}")
+    return names
+
+
+def table_rows(rows):
+    """Rows of a sheet or CSV: the first row with 2+ values is the header, empty rows are dropped."""
+    rows = iter(rows)
+    for header in rows:
+        if sum(v not in (None, "") for v in header) >= 2:
+            break
+    else:
+        return []
+    names = clean_header(header)
+    records = []
+    for r in rows:
+        values = [cell(v) for v in r]
+        if all(v is None for v in values):
+            continue
+        values += [None] * (len(names) - len(values))
+        names += [f"col_{j}" for j in range(len(names) + 1, len(values) + 1)]
+        # Unnamed columns are mostly padding: keep them only where they hold a value.
+        records.append({n: v for n, v in zip(names, values) if v is not None or not n.startswith("col_")})
+    return records
+
+
+def read_json(data):
+    doc = json.loads(data)
+    if isinstance(doc, list):  # attribute tables exported without their geometry
+        return [("", dict_rows(doc))]
+    return [("", feature_rows(doc))]
+
+
+def read_csv(data):
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = data.decode("cp1251")
+    try:
+        dialect = csv.Sniffer().sniff(text[:20000], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    return [("", dict_rows(table_rows(csv.reader(io.StringIO(text), dialect))))]
+
+
+def sheets(named_rows):
+    """One layer per non-empty sheet; the sheet name goes in the path only if there are several."""
+    tables = [(name, table_rows(rows)) for name, rows in named_rows]
+    tables = [(name, t) for name, t in tables if t]
+    return [(f"!/{name}" if len(tables) > 1 else "", dict_rows(t)) for name, t in tables]
+
+
+def read_xlsx(data):
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    return sheets((ws.title, ws.iter_rows(values_only=True)) for ws in wb.worksheets)
+
+
+def read_xls(data):
+    wb = xlrd.open_workbook(file_contents=data)
+    return sheets((sh.name, (sh.row_values(i) for i in range(sh.nrows))) for sh in wb.sheets())
+
+
+READERS = {".geojson": read_json, ".json": read_json, ".csv": read_csv,
+           ".xlsx": read_xlsx, ".xls": read_xls}
+
+
+def parse_file(name, data):
+    return READERS[os.path.splitext(name)[1].lower()](data)
 
 
 # ---- database -------------------------------------------------------------
@@ -223,14 +353,18 @@ def load_catalog(conn, data_dir):
     return metas
 
 
-def layer_is_current(conn, resource_id, source_path, sha):
-    row = conn.execute("SELECT sha256, feature_count FROM layers WHERE resource_id = %s AND source_path = %s",
-                       (resource_id, source_path)).fetchone()
-    return bool(row and sha and row[0] == sha and row[1] is not None)
+def layer_is_current(conn, resource_id, path, sha):
+    """True when every layer loaded from this file (one per sheet, or per zip member) has this sha256."""
+    n, same = conn.execute(
+        "SELECT count(*), bool_and(sha256 = %s AND feature_count IS NOT NULL) FROM layers "
+        "WHERE resource_id = %s AND (source_path = %s OR left(source_path, length(%s) + 2) = %s || '!/')",
+        (sha, resource_id, path, path, path)).fetchone()
+    return bool(sha and n and same)
 
 
-def load_layer(conn, resource_id, source_path, sha, rows, stats):
+def load_layer(conn, resource_id, source_path, sha, rows):
     """Replace one layer's features. `rows` is consumed inside the transaction."""
+    stats = LayerStats()
     with conn.transaction(), conn.cursor() as cur:
         cur.execute("INSERT INTO layers (resource_id, source_path) VALUES (%s, %s) "
                     "ON CONFLICT (resource_id, source_path) DO UPDATE SET loaded_at = now() RETURNING id",
@@ -240,6 +374,7 @@ def load_layer(conn, resource_id, source_path, sha, rows, stats):
         cur.execute("CREATE TEMP TABLE stage (source_fid text, properties jsonb, geom_json text) ON COMMIT DROP")
         with cur.copy("COPY stage FROM STDIN") as copy:
             for fid, props, geom in rows:
+                stats.add(props, geom)
                 copy.write_row((fid, Jsonb(props), None if geom is None else Jsonb(geom)))
         # All the source data is 2D; Force2D only protects the 2D column from a stray Z.
         cur.execute("""
@@ -259,7 +394,7 @@ def load_layer(conn, resource_id, source_path, sha, rows, stats):
                     (sha, stats.geometry_type(), stats.count, Jsonb(stats.field_types()), layer_id, layer_id))
         repaired = cur.execute("SELECT count(*) FROM features WHERE layer_id = %s AND geom_repaired",
                                (layer_id,)).fetchone()[0]
-    return repaired
+    return stats, repaired
 
 
 def main():
@@ -291,20 +426,17 @@ def main():
             skipped += 1
             continue
         t = time.time()
-        stats = LayerStats()
         try:
-            doc = sync.load_json(args.data_dir / path)
-            repaired = load_layer(conn, rid, path, sha, feature_rows(doc, stats), stats)
-        except (ValueError, psycopg.Error) as e:
-            errors.append((path, str(e).splitlines()[0]))
+            for suffix, rows in parse_file(path, (args.data_dir / path).read_bytes()):
+                stats, repaired = load_layer(conn, rid, path + suffix, sha, rows)
+                loaded += 1
+                features += stats.count
+                log(f"[{n}/{len(jobs)}] {stats.count:8} {stats.geometry_type() or '-':16} "
+                    f"repaired={repaired:<5} {time.time() - t:5.0f}s  {path + suffix}")
+                t = time.time()
+        except Exception as e:  # one bad file must not stop a run over hundreds
+            errors.append((path, f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"))
             log(f"[{n}/{len(jobs)}] ERROR {path}: {errors[-1][1]}")
-            continue
-        finally:
-            doc = None  # the biggest files are several GB once parsed
-        loaded += 1
-        features += stats.count
-        log(f"[{n}/{len(jobs)}] {stats.count:8} {stats.geometry_type() or '-':16} "
-            f"repaired={repaired:<5} {time.time() - t:5.0f}s  {path}")
 
     log(f"layers: {loaded} loaded ({features} features), {skipped} unchanged, {len(errors)} errors")
     for path, err in errors:
