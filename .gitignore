@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .venv/
 logs/
+# Personal to-do list of resources that failed to download
+not-downloaded.txt
