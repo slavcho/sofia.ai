@@ -3,6 +3,7 @@ import io
 import json
 import sys
 import unittest
+import zipfile
 from pathlib import Path
 
 import openpyxl
@@ -55,15 +56,18 @@ class FeatureRowsTest(unittest.TestCase):
             self.rows(None)  # sync.load_json gives None for unreadable JSON
 
     def test_crs(self):
-        wgs = {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}}
-        self.assertEqual(len(self.rows(collection({"geometry": POINT}, crs=wgs))[0]), 1)
-        bgs = {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::7801"}}
+        def crs(name):
+            return collection(crs={"type": "name", "properties": {"name": name}})
+        self.assertEqual(load_db.crs_srid(collection()), 4326)
+        self.assertEqual(load_db.crs_srid(crs("urn:ogc:def:crs:OGC:1.3:CRS84")), 4326)
+        self.assertEqual(load_db.crs_srid(crs("urn:ogc:def:crs:EPSG::7801")), 7801)  # building-solar-irradiance
+        self.assertEqual(load_db.crs_srid(crs("EPSG:4326")), 4326)
         with self.assertRaises(ValueError):
-            self.rows(collection({"geometry": POINT}, crs=bgs))
+            load_db.crs_srid(crs("something-else"))
 
 
 def rows_of(layers):
-    return [(suffix, list(rows)) for suffix, rows in layers]
+    return [(suffix, list(rows)) for suffix, rows, _ in layers]
 
 
 class TableReadersTest(unittest.TestCase):
@@ -144,6 +148,27 @@ class TableReadersTest(unittest.TestCase):
         self.assertEqual(layers[1][1], [("1", {"x": 3, "y": 4}, None)])
 
 
+class ZipLayersTest(unittest.TestCase):
+    def test_readable_members_become_layers(self):
+        # e.g. sf_pernik_padomir_railway-zip: several GeoJSON files, plus files we cannot read
+        bgs = {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::7801"}}
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("line.geojson", json.dumps(collection({"id": 1, "properties": {}, "geometry": POINT})))
+            zf.writestr("docs/", "")
+            zf.writestr("docs/readme.docx", b"x")
+            zf.writestr("00_so_boundary.gpkg", b"x")
+            zf.writestr("sub/shadows.geojson", json.dumps(collection({"properties": {"a": 1}}, crs=bgs)))
+            zf.writestr("names.csv", "old,new\nx,y\n")
+        buf.seek(0)
+        layers = [(suffix, list(rows), srid) for suffix, rows, srid in load_db.zip_layers(buf)]
+        self.assertEqual(layers, [
+            ("!/line.geojson", [("1", {}, POINT)], 4326),
+            ("!/sub/shadows.geojson", [("0", {"a": 1}, None)], 7801),
+            ("!/names.csv", [("1", {"old": "x", "new": "y"}, None)], 4326),
+        ])
+
+
 class KindTest(unittest.TestCase):
     def test_kinds(self):
         self.assertEqual(load_db.kind_of(["a/b.geojson"], "ok"), "vector")
@@ -197,6 +222,8 @@ class CatalogRowsTest(unittest.TestCase):
 
     def test_only_readable_files_become_layers(self):
         self.assertEqual(load_db.resource_layers({"status": "ok", "file": "r__x.7z", "sha256": "cc"}, "d"), [])
+        self.assertEqual(load_db.resource_layers({"status": "ok", "file": "r__x.zip", "sha256": "z"}, "d"),
+                         [("d/r__x.zip", "z")])
         meta = {"status": "ok", "parts": [{"file": "r__x.CSV", "sha256": "a"}, {"file": "r__x.pdf", "sha256": "b"},
                                           {"file": "r__x.xlsx", "sha256": "c"}]}
         self.assertEqual(load_db.resource_layers(meta, "d"), [("d/r__x.CSV", "a"), ("d/r__x.xlsx", "c")])

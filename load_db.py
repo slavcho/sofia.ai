@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Load the mirrored urbandata.sofia.bg files into PostGIS (see db/schema.sql).
 
-  python3 load_db.py                      # catalog + every GeoJSON/CSV/Excel/JSON layer
+  python3 load_db.py                      # catalog + every GeoJSON/CSV/Excel/JSON layer, also inside zips
   python3 load_db.py --dataset bus-lines  # only these datasets (repeatable)
   python3 load_db.py --only-catalog       # datasets/resources tables only
   python3 load_db.py --force              # reload layers even if unchanged
@@ -22,6 +22,7 @@ import os
 import re
 import sys
 import time
+import zipfile
 from collections import Counter
 from pathlib import Path
 
@@ -133,12 +134,12 @@ def resource_layers(meta, rel_dir):
         return []
     parts = meta.get("parts") or [meta]
     return [(f"{rel_dir}/{p['file']}", p.get("sha256")) for p in parts
-            if os.path.splitext(p.get("file", ""))[1].lower() in READERS]
+            if os.path.splitext(p.get("file", ""))[1].lower() in LOADABLE]
 
 
 # ---- parsing --------------------------------------------------------------
 #
-# Every reader turns a file into [(source_path suffix, rows)], one entry per
+# Every reader turns a file into [(source_path suffix, rows, srid)], one entry per
 # layer (a workbook has one per sheet), rows being (source_fid, properties, geometry).
 
 JSON_TYPES = [(bool, "boolean"), ((int, float), "number"), (str, "string"),
@@ -172,13 +173,25 @@ class LayerStats:
         return {k: "|".join(sorted(v)) for k, v in self.fields.items()}
 
 
+def crs_srid(doc):
+    """SRID of a GeoJSON "crs" member; none means WGS 84 (RFC 7946).
+
+    Most files are WGS 84, but e.g. building-solar-irradiance is in EPSG:7801
+    (BGS2005 / CCS2005); PostGIS converts those while loading.
+    """
+    name = ((doc.get("crs") or {}).get("properties") or {}).get("name", "")
+    if not name or name.endswith("CRS84"):
+        return 4326
+    m = re.search(r"EPSG:+(\d+)$", name)
+    if not m:
+        raise ValueError(f"unsupported CRS {name}")
+    return int(m.group(1))
+
+
 def feature_rows(doc):
     """Yield (source_fid, properties, geometry) for each feature of a FeatureCollection."""
     if not isinstance(doc, dict) or doc.get("type") != "FeatureCollection":
         raise ValueError(f"not a GeoJSON FeatureCollection: {type(doc).__name__}")
-    crs = ((doc.get("crs") or {}).get("properties") or {}).get("name", "")
-    if crs and not crs.endswith(("CRS84", "4326")):
-        raise ValueError(f"unsupported CRS {crs}")
     for i, ft in enumerate(doc.get("features") or []):
         fid = ft.get("id")
         yield (str(fid) if fid is not None else str(i)), ft.get("properties") or {}, ft.get("geometry") or None
@@ -266,8 +279,9 @@ def table_rows(rows):
 def read_json(data):
     doc = json.loads(data)
     if isinstance(doc, list):  # attribute tables exported without their geometry
-        return [("", dict_rows(doc))]
-    return [("", feature_rows(doc))]
+        return [("", dict_rows(doc), 4326)]
+    rows = feature_rows(doc)
+    return [("", rows, crs_srid(doc))]
 
 
 def read_csv(data):
@@ -279,14 +293,14 @@ def read_csv(data):
         dialect = csv.Sniffer().sniff(text[:20000], delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    return [("", dict_rows(table_rows(csv.reader(io.StringIO(text), dialect))))]
+    return [("", dict_rows(table_rows(csv.reader(io.StringIO(text), dialect))), 4326)]
 
 
 def sheets(named_rows):
     """One layer per non-empty sheet; the sheet name goes in the path only if there are several."""
     tables = [(name, table_rows(rows)) for name, rows in named_rows]
     tables = [(name, t) for name, t in tables if t]
-    return [(f"!/{name}" if len(tables) > 1 else "", dict_rows(t)) for name, t in tables]
+    return [(f"!/{name}" if len(tables) > 1 else "", dict_rows(t), 4326) for name, t in tables]
 
 
 def read_xlsx(data):
@@ -305,6 +319,22 @@ READERS = {".geojson": read_json, ".json": read_json, ".csv": read_csv,
 
 def parse_file(name, data):
     return READERS[os.path.splitext(name)[1].lower()](data)
+
+
+def zip_layers(file):
+    """Layers of every readable member of a zip; members not in READERS (.gpkg, .tif, ...) are skipped.
+
+    Members are read one at a time: some archives are several GB of rasters.
+    """
+    with zipfile.ZipFile(file) as zf:
+        for info in zf.infolist():
+            if info.is_dir() or os.path.splitext(info.filename)[1].lower() not in READERS:
+                continue
+            for suffix, rows, srid in parse_file(info.filename, zf.read(info)):
+                yield f"!/{info.filename}{suffix}", rows, srid
+
+
+LOADABLE = set(READERS) | {".zip"}
 
 
 # ---- database -------------------------------------------------------------
@@ -362,7 +392,7 @@ def layer_is_current(conn, resource_id, path, sha):
     return bool(sha and n and same)
 
 
-def load_layer(conn, resource_id, source_path, sha, rows):
+def load_layer(conn, resource_id, source_path, sha, rows, srid=4326):
     """Replace one layer's features. `rows` is consumed inside the transaction."""
     stats = LayerStats()
     with conn.transaction(), conn.cursor() as cur:
@@ -377,21 +407,22 @@ def load_layer(conn, resource_id, source_path, sha, rows):
                 stats.add(props, geom)
                 copy.write_row((fid, Jsonb(props), None if geom is None else Jsonb(geom)))
         # All the source data is 2D; Force2D only protects the 2D column from a stray Z.
+        # ST_Transform is a no-op for data that is already in 4326.
         cur.execute("""
             INSERT INTO features (layer_id, source_fid, properties, geom, geom_repaired)
             SELECT %s, source_fid, properties,
                    CASE WHEN ST_IsValid(g) THEN g ELSE ST_MakeValid(g) END,
                    coalesce(NOT ST_IsValid(g), false)
             FROM (SELECT source_fid, properties,
-                         ST_Force2D(ST_SetSRID(ST_GeomFromGeoJSON(geom_json), 4326)) AS g
-                  FROM stage) s""", (layer_id,))
+                         ST_Transform(ST_Force2D(ST_SetSRID(ST_GeomFromGeoJSON(geom_json), %s)), 4326) AS g
+                  FROM stage) s""", (layer_id, srid))
         cur.execute("""
-            UPDATE layers SET sha256 = %s, geometry_type = %s, srid = 4326, feature_count = %s,
+            UPDATE layers SET sha256 = %s, geometry_type = %s, srid = %s, feature_count = %s,
                    fields = %s, loaded_at = now(),
                    extent = (SELECT ST_SetSRID(ST_Extent(geom)::geometry, 4326)
                              FROM features WHERE layer_id = %s)
             WHERE id = %s""",
-                    (sha, stats.geometry_type(), stats.count, Jsonb(stats.field_types()), layer_id, layer_id))
+                    (sha, stats.geometry_type(), srid, stats.count, Jsonb(stats.field_types()), layer_id, layer_id))
         repaired = cur.execute("SELECT count(*) FROM features WHERE layer_id = %s AND geom_repaired",
                                (layer_id,)).fetchone()[0]
     return stats, repaired
@@ -427,8 +458,10 @@ def main():
             continue
         t = time.time()
         try:
-            for suffix, rows in parse_file(path, (args.data_dir / path).read_bytes()):
-                stats, repaired = load_layer(conn, rid, path + suffix, sha, rows)
+            full = args.data_dir / path
+            layers = zip_layers(full) if path.lower().endswith(".zip") else parse_file(path, full.read_bytes())
+            for suffix, rows, srid in layers:
+                stats, repaired = load_layer(conn, rid, path + suffix, sha, rows, srid)
                 loaded += 1
                 features += stats.count
                 log(f"[{n}/{len(jobs)}] {stats.count:8} {stats.geometry_type() or '-':16} "
