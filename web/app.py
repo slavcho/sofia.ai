@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 import psycopg
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Path as PathParam, Query
 from fastapi.responses import FileResponse, Response
 
 DSN = os.environ.get("DATABASE_URL", "host=127.0.0.1 dbname=urbandata user=urbanuser")
@@ -29,6 +29,8 @@ def json_query(sql: str, params: dict | None = None) -> Response:
     """
     with psycopg.connect(DSN, options="-c search_path=city,public") as conn:
         (body,) = conn.execute(sql, params or {}).fetchone()
+    if body is None:
+        raise HTTPException(404)
     return Response(content=body, media_type="application/json")
 
 
@@ -143,3 +145,107 @@ def metro_issues():
           LEFT JOIN metro_entrances e ON e.id = i.entrance_id
           CROSS JOIN LATERAL (SELECT coalesce(s.point, e.geom) AS geom) p
     """)
+
+
+@app.get("/api/metro/stations/{station_id}/catchment")
+def metro_station_catchment(station_id: int):
+    return json_query("""
+        SELECT (SELECT row_to_json(c) FROM station_catchment c
+                 WHERE c.station_id = %(id)s)::text
+    """, {"id": station_id})
+
+
+# Area kinds: table, key column, the table linking the area to the
+# districts it lies in (none for a district), and kind-specific fields.
+AREAS = {
+    "district": {
+        "table": "districts", "key": "code", "links": None,
+        "extra": """json_build_object('name_latin', a.name_latin,
+                        'population_nsi', a.population_nsi,
+                        'boundary_diff_km2', a.boundary_diff_km2)""",
+    },
+    "neighbourhood": {
+        "table": "neighbourhoods", "key": "id",
+        "links": ("neighbourhood_districts", "neighbourhood_id"),
+        "extra": "json_build_object('kind', a.kind, 'type_code', a.type_code)",
+    },
+    "planning_unit": {
+        "table": "planning_units", "key": "id",
+        "links": ("planning_unit_districts", "planning_unit_id"),
+        "extra": "json_build_object('district_label', a.district_label)",
+    },
+}
+AREA_KIND = "^(district|neighbourhood|planning_unit)$"
+
+
+@app.get("/api/areas/issues")
+def area_issues():
+    return json_query("""
+        SELECT coalesce(json_agg(json_build_object(
+                   'issue', i.issue, 'detail', i.detail, 'name', i.name,
+                   'area_kind', i.area_kind, 'area_id', i.area_id)
+                   ORDER BY i.issue, i.area_kind, i.area_id), '[]')::text
+          FROM area_issues i
+         WHERE i.area_kind IN ('district', 'neighbourhood', 'planning_unit')
+    """)
+
+
+@app.get("/api/areas/{kind}")
+def areas(kind: str = PathParam(pattern=AREA_KIND)):
+    a = AREAS[kind]
+    # Simplified to about 5 m: the planning units are 3 MB of GeoJSON in
+    # full detail, 0.8 MB simplified, with no visible difference.
+    return json_query(feature_collection(f"""
+        SELECT json_build_object(
+                   'type', 'Feature',
+                   'id', a.{a['key']}::integer,
+                   'geometry', ST_AsGeoJSON(ST_SimplifyPreserveTopology(a.geom, 0.00005), 5)::json,
+                   'properties', json_build_object(
+                       'id', a.{a['key']}::text, 'name', a.name,
+                       'population', a.population, 'area_km2', a.area_km2,
+                       'density', round(a.population / nullif(a.area_km2, 0)),
+                       'share_500', m.share_500, 'share_1000', m.share_1000,
+                       'planned_share_500', m.planned_share_500,
+                       'planned_share_1000', m.planned_share_1000,
+                       'gain_500', m.planned_share_500 - m.share_500)) AS feature
+          FROM {a['table']} a
+          LEFT JOIN area_metro_access m
+                 ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
+         ORDER BY a.{a['key']}
+    """), {"kind": kind})
+
+
+@app.get("/api/areas/{kind}/{area_id}")
+def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(pattern=r"^\d+$")):
+    a = AREAS[kind]
+    if a["links"]:
+        links, fk = a["links"]
+        districts = f"""(SELECT json_agg(json_build_object(
+                             'code', x.district_code, 'name', d.name,
+                             'share', x.share, 'population', x.population,
+                             'main', x.district_code = a.district_code)
+                             ORDER BY x.share DESC)
+                           FROM {links} x JOIN districts d ON d.code = x.district_code
+                          WHERE x.{fk} = a.id)"""
+    else:
+        districts = "NULL"
+    return json_query(f"""
+        SELECT (SELECT json_build_object(
+                    'kind', %(kind)s::text, 'id', a.{a['key']}::text,
+                    'name', a.name,
+                    'population', a.population, 'area_km2', a.area_km2,
+                    'density', round(a.population / nullif(a.area_km2, 0)),
+                    'extra', {a['extra']},
+                    'access', (SELECT row_to_json(m) FROM area_metro_access m
+                                WHERE m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text),
+                    'districts', {districts},
+                    'issues', (SELECT json_agg(json_build_object('issue', i.issue, 'detail', i.detail))
+                                 FROM area_issues i
+                                WHERE i.area_kind = %(kind)s AND i.area_id = a.{a['key']}::text),
+                    'bbox', json_build_array(ST_XMin(a.geom), ST_YMin(a.geom),
+                                             ST_XMax(a.geom), ST_YMax(a.geom)),
+                    'data_as_of', a.data_as_of,
+                    'source', a.source_dataset || ' #' || a.source_fid)
+                  FROM {a['table']} a
+                 WHERE a.{a['key']}::text = %(id)s)::text
+    """, {"kind": kind, "id": area_id})

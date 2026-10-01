@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sofia.ai — Metro</title>
+<title>sofia.ai — Metro and areas</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
@@ -47,6 +47,14 @@
   .issue b { font-weight: 600; }
   details summary { cursor: pointer; font-size: 13px; padding: 3px 0; }
   .empty { color: var(--muted); font-size: 12px; }
+  select { width: 100%; margin: 3px 0; padding: 4px; font: inherit; color: var(--text);
+           background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  .swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; flex: none; }
+  table.access { border-collapse: collapse; margin: 8px 0 2px; font-size: 12px; width: 100%; }
+  table.access th { color: var(--muted); font-weight: 500; text-align: right; padding: 1px 4px; }
+  table.access td { text-align: right; padding: 1px 4px; }
+  table.access th:first-child, table.access td:first-child { text-align: left; padding-left: 0; }
+  #info h4 { margin: 12px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }
   @media (max-width: 720px) {
     body { flex-direction: column-reverse; }
     #side { width: 100%; height: 45%; border-right: 0; border-top: 1px solid var(--border); }
@@ -57,7 +65,7 @@
 <body>
 <aside id="side">
   <h1>Sofia metro</h1>
-  <div class="sub">Stations 2021 · entrances 2020 (OSM) · urbandata.sofia.bg</div>
+  <div class="sub">Stations 2021 · entrances 2020 (OSM) · residents 2019 · urbandata.sofia.bg</div>
 
   <h2>Layers</h2>
   <label class="toggle"><input type="checkbox" data-layers="stations,station-labels" checked> Stations</label>
@@ -65,6 +73,16 @@
   <label class="toggle"><input type="checkbox" data-layers="entrances" checked> Entrances</label>
   <label class="toggle"><input type="checkbox" data-layers="tracks-existing,tracks-planned" checked> Track</label>
   <label class="toggle"><input type="checkbox" id="show-planned" checked> Planned stations</label>
+
+  <h2>Areas</h2>
+  <select id="area-kind">
+    <option value="">No areas</option>
+    <option value="district">Districts (райони)</option>
+    <option value="neighbourhood">Neighbourhoods (квартали)</option>
+    <option value="planning_unit">Planning units</option>
+  </select>
+  <select id="area-metric"></select>
+  <div id="area-legend" class="legend"></div>
 
   <h2>Lines</h2>
   <div id="lines"></div>
@@ -78,7 +96,7 @@
   </div>
 
   <h2>Selected</h2>
-  <div id="info"><div class="empty">Click a station or an entrance on the map.</div></div>
+  <div id="info"><div class="empty">Click a station, an entrance or an area on the map.</div></div>
 
   <h2>Data issues</h2>
   <div id="issues"></div>
@@ -88,6 +106,7 @@
 <script>
 const COLORS = { yes: '#2ba84a', limited: '#e89a00', no: '#d93a3a', unknown: '#9aa0a8' };
 const PLANNED = '#8a8f98';
+const NOTHING = ['boolean', false];   // a filter that hides every feature
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // MapLibre hands array properties back as JSON strings.
 const arr = v => Array.isArray(v) ? v : (typeof v === 'string' && v.startsWith('[') ? JSON.parse(v) : []);
@@ -109,13 +128,38 @@ const map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }));
 
+// What the areas can be coloured by. Shares are of the area's residents;
+// distances are straight lines to a station outline (an upper bound on reach).
+const ACCESS = ['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'];
+const PCT = [0.2, 0.4, 0.6, 0.8];
+const METRICS = {
+  share_500:          { label: 'Residents within 500 m of a station', breaks: PCT, colors: ACCESS, pct: true },
+  share_1000:         { label: 'Residents within 1 km of a station', breaks: PCT, colors: ACCESS, pct: true },
+  planned_share_500:  { label: 'Within 500 m, with planned stations', breaks: PCT, colors: ACCESS, pct: true },
+  planned_share_1000: { label: 'Within 1 km, with planned stations', breaks: PCT, colors: ACCESS, pct: true },
+  gain_500:           { label: 'Gain from planned stations (500 m)', breaks: [0.05, 0.15, 0.3, 0.5],
+                        colors: ['#f2f0f7', '#cbc9e2', '#9e9ac8', '#756bb1', '#54278f'], pct: true },
+  density:            { label: 'Residents per km²', breaks: [1000, 3000, 6000, 10000],
+                        colors: ['#feedde', '#fdbe85', '#fd8d3c', '#e6550d', '#a63603'] },
+};
+// Below this a share says more about one building than about the area.
+const MIN_PEOPLE = 100;
+const NO_DATA = '#c4c7cc';
+const KIND_LABEL = { district: 'District', neighbourhood: 'Neighbourhood', planning_unit: 'Planning unit' };
+const AREA_FILE = { district: 'regions_sofia.geojson (GIS Sofia)',
+                    neighbourhood: 'kvartali_26_sofpr_20190101 (Sofiaplan)',
+                    planning_unit: 'ge_26_sofpr_20200616 (Sofiaplan)' };
+
 let lines = {}, stations = null, entrances = null;
+let areaKind = '', areaCache = {}, selection = null;
+const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
+const num = v => v == null ? '—' : Number(v).toLocaleString();
 
 map.on('load', async () => {
-  const [lineList, st, outlines, en, tracks, issues] = await Promise.all([
+  const [lineList, st, outlines, en, tracks, issues, areaIssues] = await Promise.all([
     getJSON('/api/metro/lines'), getJSON('/api/metro/stations'),
     getJSON('/api/metro/stations?shape=outline'), getJSON('/api/metro/entrances'),
-    getJSON('/api/metro/tracks'), getJSON('/api/metro/issues')]);
+    getJSON('/api/metro/tracks'), getJSON('/api/metro/issues'), getJSON('/api/areas/issues')]);
   lineList.forEach(l => lines[l.code] = l);
   stations = st; entrances = en;
 
@@ -124,6 +168,15 @@ map.on('load', async () => {
   map.addSource('stations', { type: 'geojson', data: st });
   map.addSource('entrances', { type: 'geojson', data: en });
   map.addSource('selected', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addSource('areas', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+  // Areas go under everything else, so stations stay clickable on top.
+  map.addLayer({ id: 'areas-fill', type: 'fill', source: 'areas',
+    paint: { 'fill-color': NO_DATA, 'fill-opacity': 0.55 } });
+  map.addLayer({ id: 'areas-line', type: 'line', source: 'areas',
+    paint: { 'line-color': '#4a4f57', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.4, 15, 1.2] } });
+  map.addLayer({ id: 'areas-selected', type: 'line', source: 'areas', filter: NOTHING,
+    paint: { 'line-color': '#d6007a', 'line-width': 3 } });
 
   map.addLayer({ id: 'tracks-existing', type: 'line', source: 'tracks',
     filter: ['==', ['get', 'status'], 'existing'],
@@ -136,7 +189,8 @@ map.on('load', async () => {
     paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.25 } });
   map.addLayer({ id: 'outlines-line', type: 'line', source: 'outlines', minzoom: 14,
     paint: { 'line-color': ['get', 'color'], 'line-width': 1.5,
-             'line-dasharray': ['case', ['==', ['get', 'status'], 'planned'], ['literal', [2, 1]], ['literal', [1, 0]]] } });
+             // line-dasharray cannot depend on the data, so planned stations are fainter instead.
+             'line-opacity': ['case', ['==', ['get', 'status'], 'planned'], 0.5, 1] } });
   map.addLayer({ id: 'selected', type: 'circle', source: 'selected',
     paint: { 'circle-radius': 14, 'circle-color': 'rgba(0,0,0,0)',
              'circle-stroke-color': '#ffcc00', 'circle-stroke-width': 3 } });
@@ -156,9 +210,16 @@ map.on('load', async () => {
               'text-offset': [0, 1.1], 'text-anchor': 'top', 'text-optional': true },
     paint: { 'text-color': '#1d1f23', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
 
+  // Area labels go last, above the stations, but only once zoomed in.
+  map.addLayer({ id: 'areas-labels', type: 'symbol', source: 'areas', minzoom: 13,
+    layout: { 'text-field': ['coalesce', ['get', 'name'], ''], 'text-size': 11,
+              'text-font': ['Noto Sans Regular'], 'text-optional': true },
+    paint: { 'text-color': '#3b3f46', 'text-halo-color': '#fff', 'text-halo-width': 1.2 } });
+
   renderLines();
-  renderIssues(issues);
+  renderIssues(issues, areaIssues);
   bindToggles();
+  bindAreaControls();
 
   for (const id of ['stations', 'outlines-fill']) {
     map.on('click', id, e => selectStation(e.features[0].properties.id));
@@ -171,11 +232,18 @@ map.on('load', async () => {
   });
   map.on('mouseenter', 'entrances', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'entrances', () => map.getCanvas().style.cursor = '');
+  // An area is selected only where no metro object was clicked.
+  map.on('click', 'areas-fill', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: ['stations', 'entrances', 'outlines-fill'] }).length) return;
+    selectArea(areaKind, e.features[0].properties.id);
+  });
 
-  // ?station=<id> or ?entrance=<id> opens the page on that object, so it can be shared.
+  // ?station=<id>, ?entrance=<id> or ?area=<kind>:<id> opens the page on
+  // that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   if (q.has('station')) selectStation(+q.get('station'), false);
   else if (q.has('entrance')) selectEntrance(+q.get('entrance'), false);
+  else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
 function remember(kind, id) {
@@ -195,20 +263,22 @@ function renderLines() {
      <span class="sub">planned (line not given in the data)</span></div>`;
 }
 
-function renderIssues(issues) {
+function renderIssues(issues, areaIssues) {
   const groups = {};
-  issues.forEach(i => (groups[i.issue] ||= []).push(i));
+  issues.concat(areaIssues).forEach(i => (groups[i.issue] ||= []).push(i));
   const box = document.getElementById('issues');
   if (!issues.length) { box.innerHTML = '<div class="empty">None.</div>'; return; }
   box.innerHTML = Object.entries(groups).map(([name, list]) =>
     `<details><summary>${esc(name)} (${list.length})</summary>` +
     list.map((i, n) => `<div class="issue" data-g="${esc(name)}" data-n="${n}">
-       <b>${esc(i.detail || (i.station_id ? 'station #' + i.station_id : 'entrance #' + i.entrance_id))}</b></div>`).join('') +
+       ${i.area_kind ? `<b>${esc(i.name || KIND_LABEL[i.area_kind] + ' #' + i.area_id)}</b> · ${esc(i.detail)}`
+         : `<b>${esc(i.detail || (i.station_id ? 'station #' + i.station_id : 'entrance #' + i.entrance_id))}</b>`}</div>`).join('') +
     '</details>').join('');
   box.onclick = e => {
     const el = e.target.closest('.issue'); if (!el) return;
     const i = groups[el.dataset.g][+el.dataset.n];
-    if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
+    if (i.area_kind) selectArea(i.area_kind, i.area_id);
+    else if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
   };
 }
 
@@ -219,7 +289,7 @@ function bindToggles() {
   document.getElementById('show-planned').onchange = e => {
     const f = e.target.checked ? null : ['==', ['get', 'status'], 'existing'];
     ['stations', 'station-labels', 'outlines-fill', 'outlines-line'].forEach(id => map.setFilter(id, f));
-    map.setFilter('tracks-planned', e.target.checked ? ['==', ['get', 'status'], 'planned'] : ['==', 1, 0]);
+    map.setFilter('tracks-planned', e.target.checked ? ['==', ['get', 'status'], 'planned'] : NOTHING);
   };
 }
 
@@ -228,16 +298,61 @@ function moveTo(center, zoom, animate) {
   animate === false ? map.jumpTo(view) : map.flyTo(view);
 }
 
+function bindAreaControls() {
+  const metric = document.getElementById('area-metric');
+  metric.innerHTML = Object.entries(METRICS).map(([k, m]) => `<option value="${k}">${esc(m.label)}</option>`).join('');
+  metric.disabled = true;
+  metric.onchange = () => paintAreas();
+  document.getElementById('area-kind').onchange = e => setAreaKind(e.target.value);
+  paintAreas();
+}
+
+async function setAreaKind(kind) {
+  areaKind = kind;
+  document.getElementById('area-kind').value = kind;
+  document.getElementById('area-metric').disabled = !kind;
+  if (kind && !areaCache[kind]) areaCache[kind] = await getJSON('/api/areas/' + kind);
+  if (areaKind !== kind) return;          // changed again while loading
+  map.getSource('areas').setData(kind ? areaCache[kind] : { type: 'FeatureCollection', features: [] });
+  map.setLayerZoomRange('areas-labels', kind === 'district' ? 10 : 13, 24);
+  if (selection?.kind !== kind) map.setFilter('areas-selected', NOTHING);
+  paintAreas();
+}
+
+function paintAreas() {
+  const m = METRICS[document.getElementById('area-metric').value];
+  const key = document.getElementById('area-metric').value;
+  const steps = m.colors.flatMap((c, i) => i ? [m.breaks[i - 1], c] : [c]);
+  map.setPaintProperty('areas-fill', 'fill-color',
+    ['case', ['<', ['coalesce', ['get', 'population'], 0], MIN_PEOPLE], NO_DATA,
+             ['step', ['coalesce', ['get', key], 0], ...steps]]);
+  const fmt = v => m.pct ? Math.round(v * 100) + '%' : Number(v).toLocaleString();
+  const labels = m.colors.map((_, i) =>
+    i === 0 ? '< ' + fmt(m.breaks[0]) : i === m.colors.length - 1 ? '≥ ' + fmt(m.breaks[i - 1])
+            : fmt(m.breaks[i - 1]) + '–' + fmt(m.breaks[i]));
+  document.getElementById('area-legend').innerHTML = !areaKind ? '' :
+    m.colors.map((c, i) => `<span><i class="swatch" style="background:${c}"></i>${labels[i]}</span>`).join('') +
+    `<span><i class="swatch" style="background:${NO_DATA}"></i>&lt; ${MIN_PEOPLE} residents</span>`;
+}
+
 function highlight(coords) {
   map.getSource('selected').setData({ type: 'FeatureCollection',
     features: coords.map(c => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c } })) });
 }
 
+function select(kind, id) {
+  selection = { kind, id };
+  remember(KIND_LABEL[kind] ? 'area' : kind, KIND_LABEL[kind] ? `${kind}:${id}` : id);
+  if (!KIND_LABEL[kind]) map.setFilter('areas-selected', NOTHING);
+  else highlight([]);
+}
+const isSelected = (kind, id) => selection && selection.kind === kind && selection.id === id;
+
 function selectStation(id, animate) {
   const f = stations.features.find(f => f.id === id); if (!f) return;
   const p = f.properties;
   const ens = entrances.features.filter(e => e.properties.station_id === id);
-  remember('station', id);
+  select('station', id);
   highlight([f.geometry.coordinates]);
   moveTo(f.geometry.coordinates, 15.5, animate);
   document.getElementById('info').innerHTML = `
@@ -250,17 +365,24 @@ function selectStation(id, animate) {
       <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
       <dt>Source</dt><dd>${esc(p.source)}</dd>
       <dt>Name from</dt><dd>${esc(p.name_source || '—')}</dd>
+      <dt>Residents</dt><dd id="catchment" class="sub">counting…</dd>
     </dl>
     ${ens.length ? '<ul>' + ens.map(e => `<li><i class="dot" style="background:${COLORS[e.properties.wheelchair]}"></i>
         <span>${esc(e.properties.name || 'entrance #' + e.properties.id)}
         ${e.properties.access_note ? `<span class="sub">· ${esc(e.properties.access_note)}</span>` : ''}</span></li>`).join('') + '</ul>' : ''}`;
+  getJSON(`/api/metro/stations/${id}/catchment`).then(c => {
+    if (!isSelected('station', id)) return;
+    document.getElementById('catchment').outerHTML = `<dd>${num(c.within_500)} within 500 m,
+      ${num(c.within_1000)} within 1 km<br><span class="sub">nearest station for ${num(c.nearest_for)}
+      ${p.status === 'planned' ? 'once built' : ''} (residents 2019, straight-line distance)</span></dd>`;
+  }).catch(() => { const el = document.getElementById('catchment'); if (el) el.textContent = 'not available'; });
 }
 
 function selectEntrance(id, animate) {
   const f = entrances.features.find(f => f.id === id); if (!f) return;
   const p = f.properties;
   const st = stations.features.find(s => s.id === p.station_id);
-  remember('entrance', id);
+  select('entrance', id);
   highlight([f.geometry.coordinates]);
   moveTo(f.geometry.coordinates, 16.5, animate);
   document.getElementById('info').innerHTML = `
@@ -275,6 +397,53 @@ function selectEntrance(id, animate) {
     </dl>`;
   const a = document.querySelector('#info a[data-station]');
   if (a) a.onclick = e => { e.preventDefault(); selectStation(+a.dataset.station); };
+}
+
+async function selectArea(kind, id, animate) {
+  if (!KIND_LABEL[kind]) return;
+  id = String(id);
+  select(kind, id);
+  if (areaKind !== kind) await setAreaKind(kind);
+  const a = await getJSON(`/api/areas/${kind}/${id}`).catch(() => null);
+  if (!a || !isSelected(kind, id)) return;
+  map.setFilter('areas-selected', ['==', ['get', 'id'], id]);
+  map.fitBounds(a.bbox, { padding: 40, maxZoom: 16, animate: animate !== false });
+  const x = a.extra, m = a.access;
+  const cell = (n, share) => `${pct(share)} <span class="sub">${num(n)}</span>`;
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(a.name || 'Unnamed ' + KIND_LABEL[kind].toLowerCase() + ' #' + a.id)}</h3>
+    <div><span class="status">${KIND_LABEL[kind]}</span>
+         ${x.kind ? `<span class="sub">${esc(x.kind.replace('_', ' '))}</span>` : ''}
+         ${x.name_latin ? `<span class="sub">${esc(x.name_latin)} · №${esc(a.id)}</span>` : ''}</div>
+    <dl>
+      <dt>Residents</dt><dd>${num(a.population)} <span class="sub">(buildings, 2019)</span></dd>
+      ${x.population_nsi != null ? `<dt>NSI</dt><dd>${num(x.population_nsi)} <span class="sub">(control areas, 2017)</span></dd>` : ''}
+      <dt>Area</dt><dd>${num(a.area_km2)} km²</dd>
+      <dt>Density</dt><dd>${num(a.density)} per km²</dd>
+      ${x.district_label ? `<dt>Labelled</dt><dd>${esc(x.district_label)} <span class="sub">(district named in the source)</span></dd>` : ''}
+      ${x.boundary_diff_km2 != null ? `<dt>Since 2017</dt><dd>${num(x.boundary_diff_km2)} km² of boundary changed</dd>` : ''}
+    </dl>
+    <h4>Walk to the metro</h4>
+    ${m ? `<table class="access">
+      <tr><th></th><th>now</th><th>with planned</th></tr>
+      <tr><td>≤ 500 m</td><td>${cell(m.within_500, m.share_500)}</td><td>${cell(m.planned_within_500, m.planned_share_500)}</td></tr>
+      <tr><td>≤ 1 km</td><td>${cell(m.within_1000, m.share_1000)}</td><td>${cell(m.planned_within_1000, m.planned_share_1000)}</td></tr>
+    </table>
+    <div class="sub">Share of residents; straight line to a station, so an upper bound on reach.
+      ${a.population < MIN_PEOPLE ? `Few residents: the shares describe single buildings.` : ''}</div>`
+      : '<div class="empty">Nobody lives here according to the 2019 building data.</div>'}
+    ${a.districts ? `<h4>District${a.districts.length > 1 ? 's' : ''}</h4><ul>` + a.districts.map(d => `<li>
+        <a href="#" data-area="district:${esc(d.code)}">${esc(d.name)}</a>
+        <span class="sub">${pct(d.share)} of the area · ${num(d.population)} residents${d.main ? ' · main' : ''}</span></li>`).join('') + '</ul>' : ''}
+    ${a.issues ? '<h4>Data issues</h4><ul>' + a.issues.map(i => `<li><span>${esc(i.issue)}
+        <span class="sub">· ${esc(i.detail)}</span></span></li>`).join('') + '</ul>' : ''}
+    <dl>
+      <dt>Data as of</dt><dd>${esc(a.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(a.source)} <span class="sub">${esc(AREA_FILE[kind])}</span></dd>
+    </dl>`;
+  document.querySelectorAll('#info a[data-area]').forEach(l => l.onclick = e => {
+    e.preventDefault(); const [k, i] = l.dataset.area.split(':'); selectArea(k, i);
+  });
 }
 </script>
 </body>
