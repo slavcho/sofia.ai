@@ -13,21 +13,23 @@ BEGIN;
 
 DELETE FROM building_metro_access;
 
--- The <-> ordering uses the spatial index to find the nearest outline
--- in degrees; the distance is then measured in metres.
+-- Nearest by distance in metres. Not by <->: that is nearest in degrees,
+-- and a degree of longitude is only 0.73 of a degree of latitude here,
+-- which picked the wrong station for one building in six. With under a
+-- hundred stations measuring them all is cheap enough.
 INSERT INTO building_metro_access (building_id, station_id, distance_m,
                                    planned_station_id, planned_distance_m)
-SELECT b.id,
-       e.id, round(ST_Distance(e.outline::geography, b.geom::geography)::numeric),
-       p.id, round(ST_Distance(p.outline::geography, b.geom::geography)::numeric)
+SELECT b.id, e.id, round(e.d::numeric), p.id, round(p.d::numeric)
   FROM building_residents b
   CROSS JOIN LATERAL (
-       SELECT s.id, s.outline FROM metro_stations s
+       SELECT s.id, ST_Distance(s.outline::geography, b.geom::geography) AS d
+         FROM metro_stations s
         WHERE s.status = 'existing'
-        ORDER BY s.outline <-> b.geom LIMIT 1) e
+        ORDER BY d LIMIT 1) e
   CROSS JOIN LATERAL (
-       SELECT s.id, s.outline FROM metro_stations s
-        ORDER BY s.outline <-> b.geom LIMIT 1) p;
+       SELECT s.id, ST_Distance(s.outline::geography, b.geom::geography) AS d
+         FROM metro_stations s
+        ORDER BY d LIMIT 1) p;
 
 COMMIT;
 
