@@ -367,3 +367,51 @@ SELECT 'city park without a name', p.id, NULL, format('%s m²', p.area_m2)
 UNION ALL
 SELECT 'entrance without a park', NULL, e.id, coalesce(e.kind, '') || coalesce(', ' || e.note, '')
   FROM park_entrances e WHERE e.park_id IS NULL;
+
+-- ----------------------------------------------------------- park access
+--
+-- Straight-line distance from each inhabited building to the nearest
+-- park entrance, as for the metro an upper bound on reach. Only
+-- entrances linked to a park count (see park_issues for the others).
+
+CREATE TABLE IF NOT EXISTS building_park_access (
+    building_id          integer PRIMARY KEY REFERENCES building_residents(id) ON DELETE CASCADE,
+    entrance_id          integer REFERENCES park_entrances(id) ON DELETE SET NULL,  -- nearest of an existing park
+    park_id              uuid REFERENCES parks(id) ON DELETE SET NULL,              -- its park
+    distance_m           numeric,
+    outline_distance_m   numeric,     -- to the nearest existing park's edge, 0 inside; ignores gates
+    planned_entrance_id  integer REFERENCES park_entrances(id) ON DELETE SET NULL,  -- planned parks included
+    planned_distance_m   numeric,
+    city_park_entrance_id integer REFERENCES park_entrances(id) ON DELETE SET NULL, -- nearest of an existing city park (Зп)
+    city_park_distance_m numeric
+);
+
+-- Residents within 300 m (Sofiaplan's threshold), 400 m and 800 m of a
+-- park entrance, for every district, neighbourhood, planning unit and the city.
+CREATE OR REPLACE VIEW area_park_access AS
+WITH b AS (
+    SELECT r.people, r.district_code, r.neighbourhood_id, r.planning_unit_id,
+           a.distance_m, a.planned_distance_m, a.city_park_distance_m
+      FROM building_residents r
+      JOIN building_park_access a ON a.building_id = r.id
+), levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, b.* FROM b
+    UNION ALL SELECT 'district', b.district_code, b.* FROM b
+    UNION ALL SELECT 'neighbourhood', b.neighbourhood_id::text, b.* FROM b
+    UNION ALL SELECT 'planning_unit', b.planning_unit_id::text, b.* FROM b
+)
+SELECT area_kind, area_id,
+       sum(people) AS people,
+       coalesce(sum(people) FILTER (WHERE distance_m <= 300), 0) AS within_300,
+       coalesce(sum(people) FILTER (WHERE distance_m <= 400), 0) AS within_400,
+       coalesce(sum(people) FILTER (WHERE distance_m <= 800), 0) AS within_800,
+       coalesce(sum(people) FILTER (WHERE planned_distance_m <= 300), 0) AS planned_within_300,
+       coalesce(sum(people) FILTER (WHERE city_park_distance_m <= 800), 0) AS city_park_within_800,
+       round(coalesce(sum(people) FILTER (WHERE distance_m <= 300), 0)::numeric / nullif(sum(people), 0), 3) AS share_300,
+       round(coalesce(sum(people) FILTER (WHERE distance_m <= 400), 0)::numeric / nullif(sum(people), 0), 3) AS share_400,
+       round(coalesce(sum(people) FILTER (WHERE distance_m <= 800), 0)::numeric / nullif(sum(people), 0), 3) AS share_800,
+       round(coalesce(sum(people) FILTER (WHERE planned_distance_m <= 300), 0)::numeric / nullif(sum(people), 0), 3) AS planned_share_300,
+       round(coalesce(sum(people) FILTER (WHERE city_park_distance_m <= 800), 0)::numeric / nullif(sum(people), 0), 3) AS city_park_share_800
+  FROM levels
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;

@@ -121,5 +121,53 @@ class ParksTest(unittest.TestCase):
                                                         WHEN 3 THEN 'unofficial' END"""), 0)
 
 
+class ParkAccessTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.building_park_access").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.building_park_access is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_every_building_is_measured(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_residents r
+             WHERE NOT EXISTS (SELECT 1 FROM city.building_park_access a
+                                WHERE a.building_id = r.id AND a.distance_m IS NOT NULL)"""), 0)
+
+    def test_distance_is_to_the_nearest_entrance_in_metres(self):
+        # park_access.sql only measures the 5 nearest on a stretched copy;
+        # check against every entrance for one building in 20.
+        self.assertEqual(self.scalar("""
+            SELECT count(*)
+              FROM city.building_park_access a
+              JOIN city.building_residents r ON r.id = a.building_id
+             CROSS JOIN LATERAL (
+                   SELECT min(ST_Distance(e.geom::geography, r.geom::geography)) AS d
+                     FROM city.park_entrances e JOIN city.parks p ON p.id = e.park_id
+                    WHERE p.status = 'existing') m
+             WHERE r.id % 20 = 0 AND abs(a.distance_m - m.d) > 1"""), 0)
+
+    def test_edge_is_never_much_farther_than_an_entrance(self):
+        # An entrance may lie up to 30 m off its park's edge (parks.sql).
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_park_access
+             WHERE outline_distance_m > distance_m + 31"""), 0)
+
+    def test_wider_choices_never_make_it_farther(self):
+        # Planned parks add entrances; city parks are a subset.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_park_access
+             WHERE planned_distance_m > distance_m OR city_park_distance_m < distance_m"""), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
