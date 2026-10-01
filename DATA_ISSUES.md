@@ -476,3 +476,81 @@ When you add an entry, give it the next number and keep the fields.
   in the city. Both rest on municipal data, so it is worth a check on
   the ground.
 - **Check:** `education_unserved_sofiaplan`.
+
+### 36. The school catchment list has no key to the address points
+
+- **Status:** worked around.
+- **Source:** urbandata.sofia.bg, `addresses-and-associated-schools`
+  (list as of 2026-06-30) and `address_sofia-zip` (address points).
+- **What:** the list gives the school per address as free text: town,
+  street or estate, number, and entrance. Neither file has a shared id,
+  and the address points lack the GRAO street code. Street names differ
+  in form ("УЛ.3005-ТА (717 ЛЮЛИН)", "КВ.", "МЕСТН.") and some are cut
+  short ("УЛ.МИМИ БАЛКАНСКА(ИВ.НЕД.-ШАБЛ").
+- **Handling:** `school_catchments.sql` matches on normalised names in
+  four passes: street and number; estate and block; then the bracketed or
+  ordinal alternative name, first among streets and then among estates.
+  94.1 % of the 106,629 rows are placed. The other 6,262 are in 881
+  street groups. The largest are бул. Княз Ал. Дондуков-Корсаков (117),
+  бул. Лазар Михайлов (111) and Мими Балканска (94). Alternative-name
+  matches are mostly suburban and the least sure: the median distance
+  to the school is 896 m, against 524 m for street matches.
+- **Check:** `catchment_issues` ('address not among the address points').
+
+### 37. The list repeats some streets under two names
+
+- **Status:** open.
+- **Source:** as issue 36.
+- **What:** one street appears twice with different schools, e.g.
+  "УЛ.МАЛИНА" and "УЛ.МАЛИНА (233-ТА)", or "747-МА" under both
+  "(ГОРНА БАНЯ)" and "(ОВЧА КУПЕЛ)". Both rows land on the same address
+  point, so that point has two schools.
+- **Handling:** kept as the list has it; a building takes the nearer
+  address row.
+
+### 38. List schools missing from or renamed in the 2018 schools
+
+- **Status:** open.
+- **Source:** as issue 36, and the 2018 schools (issue 32).
+- **What:** 204 ОУ (524 addresses) is not among the 2018 schools. 92 ОУ
+  and 148 ОУ are matched by number only: in 2018 they were СОУ, and the
+  2018 name of 148 also includes 157-ма гимназия. The СОУ → СУ renaming
+  came after the 2016 Preschool and School Education Act.
+- **Handling:** the list keeps 204 ОУ with no school; its buildings have
+  a catchment but no distance.
+- **Check:** `catchment_issues` ('list school …').
+
+### 39. Some places are assigned to a school over 5 km away
+
+- **Status:** not an error.
+- **Source:** as issue 36.
+- **What:** villages and outlying quarters with no school of their own
+  are assigned to a far one: Долни Богров → 85 СУ (515 addresses,
+  6.5 km), Мало Бучино → 72 ОУ (471, 5.4 km), Желява → 115 ОУ (222,
+  6.7 km), Сеславци → 117 СУ (56, 5.4 km). The list says this; it is a
+  fact about access, not a data problem. Also "ГР.СОФИЯ → 26 СУ" has 5
+  addresses about 7 km away; that may be a match error.
+- **Check:** `catchment_issues` ('addresses over 5 km from their school').
+
+### 40. Estate blocks have one address point but many entrances
+
+- **Status:** open.
+- **Source:** as issue 36, and the 2019 residents per building.
+- **What:** a building takes the catchment of the nearest placed address
+  within 30 m (the median gap is 5 m). In the estates there is one
+  address point per block and one list row per entrance: Ж.К. Младост 3
+  has 331 rows on 94 points. A long block's building points are 30–100 m
+  from that one point, so only 66 % of Младост's 13,208 children have a
+  known catchment, against 93.6 % city-wide.
+- **Handling:** left unknown, because a wider radius would pick up the
+  neighbouring block's catchment. To do: match the building to the
+  block by number instead of by distance.
+- **Check:** `area_school_catchment` (`known_share`).
+
+### 41. The catchment list, the schools and the residents are of different years
+
+- **Status:** open.
+- **Source:** list 2026-06-30, schools 2018, residents 2019.
+- **What:** new streets and blocks built after 2019 have no residents.
+  Schools opened since 2018 (e.g. 204 ОУ) have no location.
+- **Handling:** shown with each figure's date.
