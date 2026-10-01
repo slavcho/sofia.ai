@@ -35,6 +35,14 @@ When you add an entry, give it the next number and keep the fields.
 | 13 | District boundaries changed since 2017 | areas | flagged |
 | 14 | Building residents cover only the city itself | population | flagged |
 | 15 | Building residents disagree with NSI by district | population | flagged |
+| 16 | 2020 parks layer dropped parks that still have entrances | parks | worked around |
+| 17 | "realiz" marks real parks as not built | parks | flagged |
+| 18 | Entrance codes are not explained | parks | worked around |
+| 19 | Entrances with no park within 30 m | parks | flagged |
+| 20 | Existing gardens without entrances | parks | flagged |
+| 21 | Most parks have no name | parks | flagged |
+| 22 | Parks layer includes places that may not be public | parks | open |
+| 23 | Sofiaplan's park access method is not documented | parks | flagged |
 
 ## Metro
 
@@ -196,3 +204,98 @@ When you add an entry, give it the next number and keep the fields.
   source (such as metro access) are more reliable than totals.
 - **Check:** `area_issues`, "population differs from NSI";
   `districts.population_nsi`.
+
+## Parks
+
+### 16. 2020 parks layer dropped parks that still have entrances
+
+- **Status:** worked around.
+- **Source:** `public-parks-and-gardens`, files `parkove_gradini_26_sofpr_20200914`
+  and `parkove_gradini_26_sofpr_20191001`; `park-and-garden-entrances` 2020.
+- **What:** 189 of the 1,641 entrances of 2020 lie more than 30 m from any
+  2020 park; 186 of them lie on a 2019 park and match a 2019 entrance.
+  The 2020 layer follows the master plan zones and has lost parks such as
+  Врана, most of Гео Милев, Негован, Слатинска река and the Позитано
+  gardens.
+- **Handling:** `parks.sql` adds the 36 parks of 2019 that are less than
+  10 % covered by 2020 parks and have a 2020 entrance within 30 m. They
+  have `data_as_of` 2019-10-01, no zone and no realization.
+
+### 17. "realiz" marks real parks as not built
+
+- **Status:** flagged.
+- **Source:** `public-parks-and-gardens` 2020, field `realiz` (0, 1, 2).
+- **What:** the field is not explained. All 573 parks with 0 have no
+  entrances (`entr` is empty, and 1 for all others), so `parks.sql` takes 0
+  as planned and 1 and 2 as existing. But 7 "planned" parks have
+  entrances, among them parts of Западен парк, Какач and Горна баня,
+  which exist.
+- **Impact:** some existing green space counts as planned, so walking
+  access is a little understated; with the planned parks it rises only
+  from 53.7 % to 54.4 % within 300 m.
+- **Check:** `park_issues`, "planned park with entrances".
+
+### 18. Entrance codes are not explained
+
+- **Status:** worked around (`size`), open (`reglament`).
+- **Source:** `park-and-garden-entrances` 2020, fields `size` (1–3) and
+  `reglament` (1, 2).
+- **What:** the 2019 entrances say in words what the 2020 ones code.
+  Within 5 m, 410 of 413 size 1 are "главен", 491 of 494 size 2
+  "второстепенен", size 3 "нерегламентиран". The 2019 words have typos
+  (главем, главех, гллавен, второстпенен). `reglament` does not follow
+  `size` (38 main entrances have 2) and has no 2019 counterpart.
+- **Handling:** `park_entrances.kind` is main / secondary / unofficial;
+  `reglament` is kept as the raw code.
+
+### 19. Entrances with no park within 30 m
+
+- **Status:** flagged.
+- **What:** 46 entrances are 30–417 m from the nearest park, most of them
+  next to parks drawn smaller than they are. Sofiaplan counted them (see
+  issue 23); `park_access.sql` does not, as their park is unknown.
+- **Check:** `park_issues`, "entrance without a park".
+
+### 20. Existing gardens without entrances
+
+- **Status:** flagged.
+- **What:** 26 small existing gardens (152–11,642 m²) have no entrance;
+  some lie 2 km from the nearest one. They count for the distance to a
+  park's edge, not to an entrance.
+- **Check:** `park_issues`, "existing park without entrances".
+
+### 21. Most parks have no name
+
+- **Status:** flagged.
+- **Source:** the 2020 parks have no name field; names come from the 2019
+  outline covering most of each park.
+- **What:** 149 of 392 existing parks have a name; 15 existing city parks
+  do not. Large parks are cut into pieces that share a name (Борисова
+  градина is 9).
+- **Check:** `park_issues`, "city park without a name".
+
+### 22. Parks layer includes places that may not be public
+
+- **Status:** open.
+- **Source:** `public-parks-and-gardens` 2019, the parks without `function_`.
+- **What:** among the 2019 parks added by issue 16 are school yards (8 СОУ,
+  46 ОУ — written "0У" with a zero —, 142 СОУ), the НСА sports complex,
+  София Тех Парк and the two Sofia Airport parks.
+- **Impact:** if they are fenced, access near them is overstated.
+- **Handling:** to do: check which are open and mark the others.
+
+### 23. Sofiaplan's park access method is not documented
+
+- **Status:** flagged.
+- **Source:** `housing-units-with-walking-access-to-parks-and-gardens` and
+  `housing-units-without-…` (2021).
+- **What:** neither the distance nor how it was measured is stated. From
+  the data: every "with" building has an entrance within 356 m in a
+  straight line and some "without" ones are 265 m from one, so it is most
+  likely 300 m along footpaths from the building outline, to any entrance.
+  The people field `ppl_sgr_30` is not explained; the 132,070 points hold
+  1.5 M people against 1.13 M in our 2019 buildings, and cover the
+  villages too.
+- **Handling:** compared point by point in `park_access_sofiaplan`; no
+  contradiction found (no "with" building lacks an entrance within 400 m).
+- **Check:** `park_access_agreement`.
