@@ -307,3 +307,63 @@ SELECT s.id AS station_id,
           JOIN building_metro_access a ON a.building_id = r.id
          WHERE a.station_id = s.id OR (s.status = 'planned' AND a.planned_station_id = s.id)) AS nearest_for
   FROM metro_stations s;
+
+-- ---------------------------------------------------------------- parks
+--
+-- Public parks and gardens with their entrances (Sofiaplan). Filled by
+-- parks.sql. The base is the 2020 layer, which follows the 2009 master
+-- plan zones; parks it dropped but the 2019 layer and the 2020 entrances
+-- still have are added from 2019 (data_as_of says which).
+
+CREATE TABLE IF NOT EXISTS parks (
+    id             uuid PRIMARY KEY,          -- "id" in the source
+    name           text,                      -- NULL when no source names it
+    name_source    text,
+    kind           text CHECK (kind IN ('city_park', 'local_garden', 'special_green')),  -- NULL: not classified
+    zone_code      text,                      -- master plan zone: Зп, Зп*, Тго, Тзсп
+    status         text NOT NULL CHECK (status IN ('existing', 'planned')),
+    realization    integer,                   -- realiz in the source: 0 none, 1 partly, 2 fully built
+    outline        geometry(MultiPolygon, 4326) NOT NULL,
+    area_m2        numeric NOT NULL,
+    tree_cover_pct numeric,                   -- share covered by tree massifs (2020 only)
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS parks_outline_idx ON parks USING gist (outline);
+
+CREATE TABLE IF NOT EXISTS park_entrances (
+    id             integer PRIMARY KEY,       -- "id" in the source
+    park_id        uuid REFERENCES parks(id) ON DELETE SET NULL,  -- nearest park within 30 m
+    distance_m     numeric,                   -- from the entrance to that park's outline
+    kind           text CHECK (kind IN ('main', 'secondary', 'unofficial')),  -- size 1, 2, 3
+    size_code      integer,                   -- size in the source
+    reglament      integer,                   -- reglament in the source; meaning unknown
+    note           text,                      -- how it is reached: светофар, подлез, спирка ...
+    geom           geometry(Point, 4326) NOT NULL,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS park_entrances_park_idx ON park_entrances (park_id);
+CREATE INDEX IF NOT EXISTS park_entrances_geom_idx ON park_entrances USING gist (geom);
+
+CREATE OR REPLACE VIEW park_issues AS
+SELECT 'existing park without entrances' AS issue, p.id AS park_id, NULL::integer AS entrance_id,
+       format('%s, %s m²', coalesce(p.name, p.zone_code), p.area_m2) AS detail
+  FROM parks p
+ WHERE p.status = 'existing'
+   AND NOT EXISTS (SELECT 1 FROM park_entrances e WHERE e.park_id = p.id)
+UNION ALL
+SELECT 'planned park with entrances', p.id, NULL,
+       format('%s, %s m², %s entrances', coalesce(p.name, p.zone_code), p.area_m2,
+              (SELECT count(*) FROM park_entrances e WHERE e.park_id = p.id))
+  FROM parks p
+ WHERE p.status = 'planned'
+   AND EXISTS (SELECT 1 FROM park_entrances e WHERE e.park_id = p.id)
+UNION ALL
+SELECT 'city park without a name', p.id, NULL, format('%s m²', p.area_m2)
+  FROM parks p WHERE p.kind = 'city_park' AND p.status = 'existing' AND p.name IS NULL
+UNION ALL
+SELECT 'entrance without a park', NULL, e.id, coalesce(e.kind, '') || coalesce(', ' || e.note, '')
+  FROM park_entrances e WHERE e.park_id IS NULL;

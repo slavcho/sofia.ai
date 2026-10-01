@@ -56,5 +56,70 @@ class MetroAccessTest(unittest.TestCase):
              WHERE planned_share_500 < share_500 OR planned_share_1000 < share_1000"""), 0)
 
 
+class ParksTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.parks").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.parks is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_entrance_is_on_its_park(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*)
+              FROM city.park_entrances e JOIN city.parks p ON p.id = e.park_id
+             WHERE e.distance_m > 30
+                OR abs(e.distance_m - ST_Distance(p.outline::geography, e.geom::geography)) > 0.1"""), 0)
+
+    def test_entrance_prefers_an_existing_park(self):
+        # Where an existing and a planned park meet, the entrance is the
+        # existing park's.
+        self.assertEqual(self.scalar("""
+            SELECT count(*)
+              FROM city.park_entrances e JOIN city.parks p ON p.id = e.park_id
+             WHERE p.status = 'planned'
+               AND EXISTS (SELECT 1 FROM city.parks q
+                            WHERE q.status = 'existing'
+                              AND ST_DWithin(q.outline::geography, e.geom::geography, 30))"""), 0)
+
+    def test_unlinked_entrance_has_no_park_within_30_m(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*)
+              FROM city.park_entrances e
+             WHERE e.park_id IS NULL
+               AND EXISTS (SELECT 1 FROM city.parks p
+                            WHERE ST_DWithin(p.outline::geography, e.geom::geography, 30))"""), 0)
+
+    def test_parks_from_2019_are_not_in_2020(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*)
+              FROM city.parks o
+             WHERE o.data_as_of < DATE '2020-01-01'
+               AND (SELECT coalesce(sum(ST_Area(ST_Intersection(k.outline, o.outline))), 0)
+                      FROM city.parks k
+                     WHERE k.data_as_of >= DATE '2020-01-01' AND k.outline && o.outline)
+                   >= 0.1 * ST_Area(o.outline)"""), 0)
+
+    def test_status_follows_realization(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.parks
+             WHERE realization IS NOT NULL
+               AND status <> CASE WHEN realization > 0 THEN 'existing' ELSE 'planned' END"""), 0)
+
+    def test_entrance_kind_follows_size(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.park_entrances
+             WHERE kind IS DISTINCT FROM CASE size_code WHEN 1 THEN 'main' WHEN 2 THEN 'secondary'
+                                                        WHEN 3 THEN 'unofficial' END"""), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
