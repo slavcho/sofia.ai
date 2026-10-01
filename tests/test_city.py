@@ -168,6 +168,26 @@ class ParkAccessTest(unittest.TestCase):
             SELECT count(*) FROM city.building_park_access
              WHERE planned_distance_m > distance_m OR city_park_distance_m < distance_m"""), 0)
 
+    def test_both_sofiaplan_files_are_compared(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FILTER (WHERE sofiaplan_access)::text || '/' || count(*)
+              FROM city.park_access_sofiaplan"""), "38031/132070")
+
+    def test_sofiaplan_access_has_an_entrance_within_400_m(self):
+        # Walking is never shorter than a straight line, so where Sofiaplan
+        # finds access within 300 m there must be an entrance close by; the
+        # extra 100 m is for measuring from the outline, not the centre.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.park_access_sofiaplan
+             WHERE sofiaplan_access AND any_distance_m > 400"""), 0)
+
+    def test_agreement_share_is_zero_not_null_without_access(self):
+        # Дружба 2: no Sofiaplan building with access, and none of ours.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.park_access_agreement
+             WHERE (sofiaplan_share IS NULL OR our_share_300 IS NULL)
+               AND buildings > 0"""), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

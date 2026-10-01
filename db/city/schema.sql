@@ -415,3 +415,59 @@ SELECT area_kind, area_id,
   FROM levels
  WHERE area_id IS NOT NULL
  GROUP BY area_kind, area_id;
+
+-- Sofiaplan's own answer to the same question (2021): every building
+-- marked with or without walking access to a park, compared with our
+-- straight-line distances from the same points. Filled by park_access.sql.
+CREATE TABLE IF NOT EXISTS park_access_sofiaplan (
+    sofiaplan_access boolean NOT NULL,        -- which of the two files it is in
+    source_id      integer NOT NULL,          -- "id" in that file
+    people         numeric,                   -- ppl_sgr_30; the "30" is not explained
+    floor_area_m2  numeric,                   -- rzp (gross floor area)
+    geom           geometry(Point, 4326) NOT NULL,
+    district_code  text REFERENCES districts(code),
+    neighbourhood_id integer REFERENCES neighbourhoods(id),
+    distance_m     numeric,                   -- nearest entrance we count (existing park)
+    any_distance_m numeric,                   -- nearest of all entrances, park or not
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL,
+    PRIMARY KEY (sofiaplan_access, source_id)
+);
+CREATE INDEX IF NOT EXISTS park_access_sofiaplan_geom_idx ON park_access_sofiaplan USING gist (geom);
+
+-- How the two answers agree, by area. Sofiaplan most likely measured
+-- 300 m along footpaths from the building outline, we measure straight
+-- lines from its centre point, so:
+--   ours_only        expected: the walk is longer than the straight line
+--   excluded_entrance Sofiaplan counted an entrance we do not (no park, or a planned park)
+--   beyond_300       a building's centre is a little farther than its outline
+--   beyond_400       a real contradiction: no entrance at all within 400 m
+CREATE OR REPLACE VIEW park_access_agreement AS
+WITH c AS (
+    SELECT s.*,
+           CASE WHEN s.sofiaplan_access AND s.distance_m <= 300 THEN 'both'
+                WHEN NOT s.sofiaplan_access AND s.distance_m > 300 THEN 'neither'
+                WHEN NOT s.sofiaplan_access THEN 'ours_only'
+                WHEN s.any_distance_m <= 300 THEN 'excluded_entrance'
+                WHEN s.any_distance_m <= 400 THEN 'beyond_300'
+                ELSE 'beyond_400' END AS agreement
+      FROM park_access_sofiaplan s
+), levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, c.* FROM c
+    UNION ALL SELECT 'district', c.district_code, c.* FROM c
+    UNION ALL SELECT 'neighbourhood', c.neighbourhood_id::text, c.* FROM c
+)
+SELECT area_kind, area_id,
+       count(*) AS buildings,
+       count(*) FILTER (WHERE agreement = 'both') AS both,
+       count(*) FILTER (WHERE agreement = 'neither') AS neither,
+       count(*) FILTER (WHERE agreement = 'ours_only') AS ours_only,
+       count(*) FILTER (WHERE agreement = 'excluded_entrance') AS excluded_entrance,
+       count(*) FILTER (WHERE agreement = 'beyond_300') AS beyond_300,
+       count(*) FILTER (WHERE agreement = 'beyond_400') AS beyond_400,
+       round(coalesce(sum(people) FILTER (WHERE sofiaplan_access), 0) / nullif(sum(people), 0), 3) AS sofiaplan_share,
+       round(coalesce(sum(people) FILTER (WHERE distance_m <= 300), 0) / nullif(sum(people), 0), 3) AS our_share_300
+  FROM levels
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;
