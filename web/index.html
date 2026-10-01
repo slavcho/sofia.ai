@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sofia.ai — Metro, parks and areas</title>
+<title>sofia.ai — Metro, parks, schools and areas</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
@@ -64,8 +64,8 @@
 </head>
 <body>
 <aside id="side">
-  <h1>Sofia metro and parks</h1>
-  <div class="sub">Stations 2021 · entrances 2020 (OSM) · parks 2020 · residents 2019 · urbandata.sofia.bg</div>
+  <h1>Sofia metro, parks and schools</h1>
+  <div class="sub">Stations 2021 · entrances 2020 (OSM) · parks 2020 · kindergartens and schools 2018 · residents 2019 · urbandata.sofia.bg</div>
 
   <h2>Layers</h2>
   <label class="toggle"><input type="checkbox" data-layers="stations,station-labels" checked> Stations</label>
@@ -76,6 +76,8 @@
   <label class="toggle"><input type="checkbox" data-layers="parks-fill,parks-line" checked> Parks</label>
   <label class="toggle"><input type="checkbox" data-layers="park-entrances" checked> Park entrances</label>
   <label class="toggle"><input type="checkbox" id="show-planned-parks"> Planned parks</label>
+  <label class="toggle"><input type="checkbox" data-layers="kindergartens" checked> Kindergartens</label>
+  <label class="toggle"><input type="checkbox" data-layers="schools" checked> Schools</label>
 
   <h2>Areas</h2>
   <select id="area-kind">
@@ -101,8 +103,11 @@
   <h2>Parks</h2>
   <div id="park-legend" class="legend"></div>
 
+  <h2>Kindergartens and schools</h2>
+  <div id="education-legend" class="legend"></div>
+
   <h2>Selected</h2>
-  <div id="info"><div class="empty">Click a station, a park, an entrance or an area on the map.</div></div>
+  <div id="info"><div class="empty">Click a station, a park, a school, an entrance or an area on the map.</div></div>
 
   <h2>Data issues</h2>
   <div id="issues"></div>
@@ -116,6 +121,12 @@ const PARK_COLORS = { city_park: '#2e8b57', local_garden: '#74c476', special_gre
 const PARK_KIND = { city_park: 'city park (Зп)', local_garden: 'local garden (Тго)',
                     special_green: 'special green area (Тзсп)', unclassified: 'not classified (2019)' };
 const GATE_COLORS = { main: '#00441b', secondary: '#41ab5d', unofficial: '#e6550d', unknown: '#9aa0a8' };
+// Kindergartens in oranges, schools in purples; the shade is who funds them.
+const KG_COLORS = { municipal: '#e6550d', state: '#8c2d04', private: '#fdae6b', unknown: '#9aa0a8' };
+const SCHOOL_COLORS = { municipal: '#6a51a3', state: '#3f007d', private: '#bcbddc', unknown: '#9aa0a8' };
+const KG_KIND = { kindergarten: 'kindergarten', nursery: 'nursery (ДЯ)', other: 'other (centre)' };
+const SCHOOL_KIND = { primary: 'primary (НУ, 1–4)', basic: 'basic (ОУ, 1–7)', secondary: 'secondary (СОУ, 1–12)',
+                      profiled: 'profiled (ПГ)', vocational: 'vocational', special: 'special' };
 const NOTHING = ['boolean', false];   // a filter that hides every feature
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // MapLibre hands array properties back as JSON strings.
@@ -143,6 +154,8 @@ map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }));
 const ACCESS = ['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'];
 const PCT = [0.2, 0.4, 0.6, 0.8];
 const GREEN = ['#ffffcc', '#c2e699', '#78c679', '#31a354', '#006837'];
+const ORANGE = ['#feedde', '#fdbe85', '#fd8d3c', '#e6550d', '#a63603'];
+const PURPLE = ['#f2f0f7', '#cbc9e2', '#9e9ac8', '#756bb1', '#54278f'];
 const METRICS = {
   share_500:          { label: 'Residents within 500 m of a station', breaks: PCT, colors: ACCESS, pct: true },
   share_1000:         { label: 'Residents within 1 km of a station', breaks: PCT, colors: ACCESS, pct: true },
@@ -154,6 +167,11 @@ const METRICS = {
   park_share_800:     { label: 'Parks: residents within 800 m of an entrance', breaks: PCT, colors: GREEN, pct: true },
   city_park_share_800: { label: 'Parks: within 800 m of a city park', breaks: PCT, colors: GREEN, pct: true },
   sofiaplan_park_share: { label: 'Parks: Sofiaplan, with walking access (2021)', breaks: PCT, colors: GREEN, pct: true },
+  kindergarten_share_500: { label: 'Children within 500 m of a kindergarten', breaks: PCT, colors: ORANGE, pct: true },
+  municipal_kindergarten_share_500: { label: 'Children within 500 m of a municipal kindergarten', breaks: PCT, colors: ORANGE, pct: true },
+  registered_per_child: { label: 'Registered in municipal kindergartens per child (0–14)', breaks: [0.1, 0.2, 0.3, 0.4], colors: ORANGE },
+  school_share_800:   { label: 'Children within 800 m of a school (1–7)', breaks: PCT, colors: PURPLE, pct: true },
+  sofiaplan_school_share_800: { label: 'Schools: Sofiaplan, 800 m on foot (2019)', breaks: PCT, colors: PURPLE, pct: true },
   density:            { label: 'Residents per km²', breaks: [1000, 3000, 6000, 10000],
                         colors: ['#feedde', '#fdbe85', '#fd8d3c', '#e6550d', '#a63603'] },
 };
@@ -165,19 +183,20 @@ const AREA_FILE = { district: 'regions_sofia.geojson (GIS Sofia)',
                     neighbourhood: 'kvartali_26_sofpr_20190101 (Sofiaplan)',
                     planning_unit: 'ge_26_sofpr_20200616 (Sofiaplan)' };
 
-let lines = {}, stations = null, entrances = null, parks = null, gates = null;
+let lines = {}, stations = null, entrances = null, parks = null, gates = null, kgs = null, schools = null;
 let areaKind = '', areaCache = {}, selection = null;
 const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
 const num = v => v == null ? '—' : Number(v).toLocaleString();
 
 map.on('load', async () => {
-  const [lineList, st, outlines, en, tracks, issues, areaIssues, pk, pe, parkIssues] = await Promise.all([
+  const [lineList, st, outlines, en, tracks, issues, areaIssues, pk, pe, parkIssues, kg, sc, eduIssues] = await Promise.all([
     getJSON('/api/metro/lines'), getJSON('/api/metro/stations'),
     getJSON('/api/metro/stations?shape=outline'), getJSON('/api/metro/entrances'),
     getJSON('/api/metro/tracks'), getJSON('/api/metro/issues'), getJSON('/api/areas/issues'),
-    getJSON('/api/parks'), getJSON('/api/parks/entrances'), getJSON('/api/parks/issues')]);
+    getJSON('/api/parks'), getJSON('/api/parks/entrances'), getJSON('/api/parks/issues'),
+    getJSON('/api/kindergartens'), getJSON('/api/schools'), getJSON('/api/education/issues')]);
   lineList.forEach(l => lines[l.code] = l);
-  stations = st; entrances = en; parks = pk; gates = pe;
+  stations = st; entrances = en; parks = pk; gates = pe; kgs = kg; schools = sc;
 
   map.addSource('tracks', { type: 'geojson', data: tracks });
   map.addSource('outlines', { type: 'geojson', data: outlines });
@@ -187,6 +206,8 @@ map.on('load', async () => {
   map.addSource('areas', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('parks', { type: 'geojson', data: pk, promoteId: 'id' });
   map.addSource('park-entrances', { type: 'geojson', data: pe });
+  map.addSource('kindergartens', { type: 'geojson', data: kg });
+  map.addSource('schools', { type: 'geojson', data: sc });
 
   // Areas go under everything else, so stations stay clickable on top.
   map.addLayer({ id: 'areas-fill', type: 'fill', source: 'areas',
@@ -228,6 +249,17 @@ map.on('load', async () => {
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 2.5, 17, 5],
              'circle-color': ['match', ['get', 'kind'], ...Object.entries(GATE_COLORS).flat(), GATE_COLORS.unknown],
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  // Closed and doubtful kindergartens (and schools with no classes) are faded.
+  map.addLayer({ id: 'kindergartens', type: 'circle', source: 'kindergartens', minzoom: 12,
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 2.5, 17, 6],
+             'circle-color': ['match', ['get', 'funding'], ...Object.entries(KG_COLORS).flat(), KG_COLORS.unknown],
+             'circle-opacity': ['case', ['==', ['get', 'status'], 'open'], 1, 0.35],
+             'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  map.addLayer({ id: 'schools', type: 'circle', source: 'schools', minzoom: 12,
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 3.5, 17, 8],
+             'circle-color': ['match', ['get', 'funding'], ...Object.entries(SCHOOL_COLORS).flat(), SCHOOL_COLORS.unknown],
+             'circle-opacity': ['case', ['>', ['coalesce', ['get', 'class_count'], 0], 0], 1, 0.5],
+             'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'entrances', type: 'circle', source: 'entrances', minzoom: 13,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 2.5, 17, 6],
              'circle-color': ['match', ['get', 'wheelchair'],
@@ -252,7 +284,8 @@ map.on('load', async () => {
 
   renderLines();
   renderParkLegend();
-  renderIssues(issues, areaIssues, parkIssues);
+  renderEducationLegend();
+  renderIssues(issues, areaIssues, parkIssues, eduIssues);
   bindToggles();
   bindAreaControls();
 
@@ -267,32 +300,44 @@ map.on('load', async () => {
   });
   map.on('mouseenter', 'entrances', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'entrances', () => map.getCanvas().style.cursor = '');
-  // Metro first, then park entrances, parks, and areas last.
+  // Metro first, then park entrances, schools and kindergartens, parks, and areas last.
   const METRO = ['stations', 'entrances', 'outlines-fill'];
+  const EDU = ['schools', 'kindergartens'];
   map.on('click', 'park-entrances', e => {
     if (map.queryRenderedFeatures(e.point, { layers: METRO }).length) return;
     selectParkEntrance(e.features[0].properties.id);
   });
-  map.on('click', 'parks-fill', e => {
+  map.on('click', 'schools', e => {
     if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances'] }).length) return;
+    selectSchool(e.features[0].properties.id);
+  });
+  map.on('click', 'kindergartens', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', 'schools'] }).length) return;
+    selectKindergarten(e.features[0].properties.id);
+  });
+  map.on('click', 'parks-fill', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU] }).length) return;
     selectPark(e.features[0].properties.id);
   });
-  for (const id of ['park-entrances', 'parks-fill']) {
+  for (const id of ['park-entrances', ...EDU, 'parks-fill']) {
     map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   }
   map.on('click', 'areas-fill', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', 'parks-fill'] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'parks-fill'] }).length) return;
     selectArea(areaKind, e.features[0].properties.id);
   });
 
-  // ?station=<id>, ?entrance=<id>, ?park=<id>, ?park_entrance=<id> or
-  // ?area=<kind>:<id> opens the page on that object, so it can be shared.
+  // ?station=<id>, ?entrance=<id>, ?park=<id>, ?park_entrance=<id>,
+  // ?kindergarten=<id>, ?school=<id> or ?area=<kind>:<id> opens the page
+  // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   if (q.has('station')) selectStation(+q.get('station'), false);
   else if (q.has('entrance')) selectEntrance(+q.get('entrance'), false);
   else if (q.has('park')) selectPark(q.get('park'), false);
   else if (q.has('park_entrance')) selectParkEntrance(+q.get('park_entrance'), false);
+  else if (q.has('kindergarten')) selectKindergarten(+q.get('kindergarten'), false);
+  else if (q.has('school')) selectSchool(+q.get('school'), false);
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
@@ -321,9 +366,17 @@ function renderParkLegend() {
       `<span><i class="dot" style="background:${GATE_COLORS[k]}"></i>${k} entrance</span>`).join('');
 }
 
-function renderIssues(issues, areaIssues, parkIssues) {
+function renderEducationLegend() {
+  const fundings = ['municipal', 'state', 'private'];
+  document.getElementById('education-legend').innerHTML =
+    fundings.map(k => `<span><i class="dot" style="background:${KG_COLORS[k]}"></i>${k} kindergarten</span>`).join('') +
+    fundings.map(k => `<span><i class="dot" style="background:${SCHOOL_COLORS[k]}"></i>${k} school</span>`).join('') +
+    `<span><i class="dot" style="background:${KG_COLORS.municipal};opacity:.35"></i>closed, doubtful or no classes</span>`;
+}
+
+function renderIssues(issues, areaIssues, parkIssues, eduIssues) {
   const groups = {};
-  issues.concat(areaIssues, parkIssues).forEach(i => (groups[i.issue] ||= []).push(i));
+  issues.concat(areaIssues, parkIssues, eduIssues).forEach(i => (groups[i.issue] ||= []).push(i));
   const box = document.getElementById('issues');
   if (!issues.length) { box.innerHTML = '<div class="empty">None.</div>'; return; }
   box.innerHTML = Object.entries(groups).map(([name, list]) =>
@@ -337,6 +390,7 @@ function renderIssues(issues, areaIssues, parkIssues) {
     const i = groups[el.dataset.g][+el.dataset.n];
     if (i.area_kind) selectArea(i.area_kind, i.area_id);
     else if (i.park_id) selectPark(i.park_id); else if (i.park_entrance_id) selectParkEntrance(i.park_entrance_id);
+    else if (i.kindergarten_id) selectKindergarten(i.kindergarten_id); else if (i.school_id) selectSchool(i.school_id);
     else if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
   };
 }
@@ -472,7 +526,7 @@ async function selectArea(kind, id, animate) {
   if (!a || !isSelected(kind, id)) return;
   map.setFilter('areas-selected', ['==', ['get', 'id'], id]);
   map.fitBounds(a.bbox, { padding: 40, maxZoom: 16, animate: animate !== false });
-  const x = a.extra, m = a.access;
+  const x = a.extra, m = a.access, e = a.education_access;
   const cell = (n, share) => `${pct(share)} <span class="sub">${num(n)}</span>`;
   document.getElementById('info').innerHTML = `
     <h3>${esc(a.name || 'Unnamed ' + KIND_LABEL[kind].toLowerCase() + ' #' + a.id)}</h3>
@@ -509,6 +563,25 @@ async function selectArea(kind, id, animate) {
     ${a.park_agreement ? `<div class="sub" style="margin-top:6px">Sofiaplan (2021, 300 m on foot):
       ${pct(a.park_agreement.sofiaplan_share)} of residents with access, we find
       ${pct(a.park_agreement.our_share_300)} for the same ${num(a.park_agreement.buildings)} buildings.</div>` : ''}
+    <h4>Walk to a kindergarten or school</h4>
+    ${e && e.children ? `<table class="access">
+      <tr><th></th><th>kindergarten</th><th>school (1–7)</th></tr>
+      <tr><td>≤ 300 m</td><td>${cell(e.kindergarten_within_300, e.kindergarten_share_300)}</td><td></td></tr>
+      <tr><td>≤ 400 m</td><td></td><td>${cell(e.school_within_400, e.school_share_400)}</td></tr>
+      <tr><td>≤ 500 m</td><td>${cell(e.kindergarten_within_500, e.kindergarten_share_500)}</td><td></td></tr>
+      <tr><td>≤ 800 m</td><td></td><td>${cell(e.school_within_800, e.school_share_800)}</td></tr>
+      <tr><td>municipal</td><td>${cell(e.municipal_kindergarten_within_500, e.municipal_kindergarten_share_500)}</td>
+          <td>${cell(e.municipal_school_within_800, e.municipal_school_share_800)}</td></tr>
+    </table>
+    <div class="sub">Share of the ${num(e.children)} children aged 0–14 (2019); straight line to an open
+      kindergarten or a НУ, ОУ or СОУ school (2018). Municipal: within 500 m and 800 m.
+      ${e.registered_children != null ? `Municipal kindergartens here register ${num(e.registered_children)} children,
+      ${num(e.registered_per_child)} per child.` : ''}</div>`
+      : '<div class="empty">No children in the 2019 building data.</div>'}
+    ${a.school_agreement ? `<div class="sub" style="margin-top:6px">Sofiaplan (2019, on foot, any school):
+      ${pct(a.school_agreement.sofiaplan_share_400)} of children within 400 m and
+      ${pct(a.school_agreement.sofiaplan_share_800)} within 800 m; we find
+      ${pct(a.school_agreement.our_share_400)} and ${pct(a.school_agreement.our_share_800)} in a straight line.</div>` : ''}
     ${a.districts ? `<h4>District${a.districts.length > 1 ? 's' : ''}</h4><ul>` + a.districts.map(d => `<li>
         <a href="#" data-area="district:${esc(d.code)}">${esc(d.name)}</a>
         <span class="sub">${pct(d.share)} of the area · ${num(d.population)} residents${d.main ? ' · main' : ''}</span></li>`).join('') + '</ul>' : ''}
@@ -579,6 +652,51 @@ function selectParkEntrance(id, animate) {
     </dl>`;
   const a = document.querySelector('#info a[data-park]');
   if (a) a.onclick = e => { e.preventDefault(); selectPark(a.dataset.park); };
+}
+
+function selectKindergarten(id, animate) {
+  const f = kgs.features.find(f => f.id === id); if (!f) return;
+  const p = f.properties;
+  select('kindergarten', id);
+  highlight([f.geometry.coordinates]);
+  moveTo(f.geometry.coordinates, 16, animate);
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.name || 'Kindergarten #' + p.id)}</h3>
+    <div><i class="dot" style="background:${KG_COLORS[p.funding]}"></i> ${esc(KG_KIND[p.kind])}, ${esc(p.funding)}
+         <span class="status">${esc(p.status)}</span>${p.is_branch ? ' <span class="sub">branch</span>' : ''}</div>
+    <dl>
+      ${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}
+      <dt>Registered</dt><dd>${p.groups != null ? `${num(p.groups)} groups, ${num(p.children)} children
+          ${p.nursery_children ? `<span class="sub">(${num(p.nursery_children)} in nursery groups)</span>` : ''}`
+        : p.children == null && p.funding === 'municipal' ? 'no group data <span class="sub">(municipal registration only)</span>'
+        : '— <span class="sub">(only municipal kindergartens register here)</span>'}</dd>
+      <dt>Address</dt><dd>${esc(p.address || '—')}</dd>
+      <dt>Funding</dt><dd>${esc(p.funding)} <span class="sub">(code ${esc(p.funding_code ?? '—')})</span></dd>
+      ${p.details_url ? `<dt>Details</dt><dd><a href="${esc(p.details_url)}" target="_blank" rel="noopener">${esc(p.details_url)}</a></dd>` : ''}
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
+}
+
+function selectSchool(id, animate) {
+  const f = schools.features.find(f => f.id === id); if (!f) return;
+  const p = f.properties;
+  select('school', id);
+  highlight([f.geometry.coordinates]);
+  moveTo(f.geometry.coordinates, 16, animate);
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.name || 'School #' + p.id)}</h3>
+    <div><i class="dot" style="background:${SCHOOL_COLORS[p.funding]}"></i> ${esc(SCHOOL_KIND[p.kind] || p.kind)}, ${esc(p.funding)}</div>
+    <dl>
+      ${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}
+      <dt>Classes</dt><dd>${p.class_count ? num(p.class_count) + ' classes' : '— <span class="sub">(0 or missing in the source)</span>'}</dd>
+      <dt>Address</dt><dd>${esc(p.address || '—')}</dd>
+      <dt>Admin code</dt><dd>${esc(p.admin_code ?? '—')}</dd>
+      <dt>Funding</dt><dd>${esc(p.funding)} <span class="sub">(code ${esc(p.funding_code ?? '—')})</span></dd>
+      ${p.details_url ? `<dt>Details</dt><dd><a href="${esc(p.details_url)}" target="_blank" rel="noopener">${esc(p.details_url)}</a></dd>` : ''}
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
 }
 </script>
 </body>

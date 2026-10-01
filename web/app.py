@@ -211,6 +211,63 @@ def park_issues():
     """)
 
 
+@app.get("/api/kindergartens")
+def kindergartens():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature',
+                   'id', k.id,
+                   'geometry', ST_AsGeoJSON(k.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', k.id, 'name', k.name, 'number', k.number, 'kind', k.kind,
+                       'funding', coalesce(k.funding, 'unknown'), 'funding_code', k.funding_code,
+                       'is_branch', k.is_branch, 'status', k.status, 'note', k.note,
+                       'address', k.address, 'district_code', k.district_code,
+                       'details_url', k.details_url, 'groups', k.groups, 'children', k.children,
+                       'nursery_children', k.nursery_children,
+                       'data_as_of', k.data_as_of,
+                       'source', k.source_dataset || ' #' || k.source_fid)) AS feature
+          FROM kindergartens k
+         ORDER BY k.id
+    """))
+
+
+@app.get("/api/schools")
+def schools():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature',
+                   'id', s.id,
+                   'geometry', ST_AsGeoJSON(s.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', s.id, 'name', s.name, 'number', s.number, 'admin_code', s.admin_code,
+                       'kind', s.kind, 'funding', coalesce(s.funding, 'unknown'),
+                       'funding_code', s.funding_code, 'class_count', s.class_count,
+                       'note', s.note, 'address', s.address, 'district_code', s.district_code,
+                       'details_url', s.details_url,
+                       'data_as_of', s.data_as_of,
+                       'source', s.source_dataset || ' #' || s.source_fid)) AS feature
+          FROM schools s
+         ORDER BY s.id
+    """))
+
+
+@app.get("/api/education/issues")
+def education_issues():
+    return json_query("""
+        SELECT coalesce(json_agg(json_build_object(
+                   'issue', i.issue, 'detail', i.detail,
+                   'kindergarten_id', i.kindergarten_id, 'school_id', i.school_id,
+                   'lon', round(ST_X(g.geom)::numeric, 6),
+                   'lat', round(ST_Y(g.geom)::numeric, 6))
+                   ORDER BY i.issue, i.kindergarten_id, i.school_id), '[]')::text
+          FROM education_issues i
+          LEFT JOIN kindergartens k ON k.id = i.kindergarten_id
+          LEFT JOIN schools s ON s.id = i.school_id
+          CROSS JOIN LATERAL (SELECT coalesce(k.geom, s.geom) AS geom) g
+    """)
+
+
 # Area kinds: table, key column, the table linking the area to the
 # districts it lies in (none for a district), and kind-specific fields.
 AREAS = {
@@ -266,7 +323,12 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'gain_500', m.planned_share_500 - m.share_500,
                        'park_share_300', k.share_300, 'park_share_800', k.share_800,
                        'city_park_share_800', k.city_park_share_800,
-                       'sofiaplan_park_share', g.sofiaplan_share)) AS feature
+                       'sofiaplan_park_share', g.sofiaplan_share,
+                       'kindergarten_share_500', e.kindergarten_share_500,
+                       'municipal_kindergarten_share_500', e.municipal_kindergarten_share_500,
+                       'school_share_800', e.school_share_800,
+                       'registered_per_child', e.registered_per_child,
+                       'sofiaplan_school_share_800', s.sofiaplan_share_800)) AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
@@ -274,6 +336,10 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                  ON k.area_kind = %(kind)s AND k.area_id = a.{a['key']}::text
           LEFT JOIN park_access_agreement g
                  ON g.area_kind = %(kind)s AND g.area_id = a.{a['key']}::text
+          LEFT JOIN area_education_access e
+                 ON e.area_kind = %(kind)s AND e.area_id = a.{a['key']}::text
+          LEFT JOIN school_access_agreement s
+                 ON s.area_kind = %(kind)s AND s.area_id = a.{a['key']}::text
          ORDER BY a.{a['key']}
     """), {"kind": kind})
 
@@ -305,6 +371,10 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                      WHERE k.area_kind = %(kind)s AND k.area_id = a.{a['key']}::text),
                     'park_agreement', (SELECT row_to_json(g) FROM park_access_agreement g
                                         WHERE g.area_kind = %(kind)s AND g.area_id = a.{a['key']}::text),
+                    'education_access', (SELECT row_to_json(e) FROM area_education_access e
+                                          WHERE e.area_kind = %(kind)s AND e.area_id = a.{a['key']}::text),
+                    'school_agreement', (SELECT row_to_json(s) FROM school_access_agreement s
+                                          WHERE s.area_kind = %(kind)s AND s.area_id = a.{a['key']}::text),
                     'districts', {districts},
                     'issues', (SELECT json_agg(json_build_object('issue', i.issue, 'detail', i.detail))
                                  FROM area_issues i
