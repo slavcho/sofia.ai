@@ -24,3 +24,6 @@ Every new feature should serve at least one of these directives.
 
 Before working with the data, read the principles, data layout and querying
 notes in [README.md](README.md).
+
+Record every problem found in the source data in
+[DATA_ISSUES.md](DATA_ISSUES.md), and check it before trusting a result.
