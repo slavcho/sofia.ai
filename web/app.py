@@ -155,6 +155,62 @@ def metro_station_catchment(station_id: int):
     """, {"id": station_id})
 
 
+@app.get("/api/parks")
+def parks():
+    # Simplified to about 5 m, as the areas.
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature',
+                   'geometry', ST_AsGeoJSON(ST_SimplifyPreserveTopology(p.outline, 0.00005), 6)::json,
+                   'properties', json_build_object(
+                       'id', p.id, 'name', p.name, 'name_source', p.name_source,
+                       'kind', coalesce(p.kind, 'unclassified'), 'zone_code', p.zone_code,
+                       'status', p.status, 'realization', p.realization,
+                       'area_m2', p.area_m2, 'tree_cover_pct', p.tree_cover_pct,
+                       'entrances', (SELECT count(*) FROM park_entrances e WHERE e.park_id = p.id),
+                       'data_as_of', p.data_as_of,
+                       'source', p.source_dataset || ' #' || p.source_fid)) AS feature
+          FROM parks p
+         ORDER BY p.area_m2 DESC
+    """))
+
+
+@app.get("/api/parks/entrances")
+def park_entrances():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature',
+                   'id', e.id,
+                   'geometry', ST_AsGeoJSON(e.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', e.id, 'park_id', e.park_id, 'park_name', p.name,
+                       'park_status', p.status,
+                       'kind', coalesce(e.kind, 'unknown'), 'reglament', e.reglament,
+                       'note', e.note, 'distance_m', e.distance_m,
+                       'data_as_of', e.data_as_of,
+                       'source', e.source_dataset || ' #' || e.source_fid)) AS feature
+          FROM park_entrances e
+          LEFT JOIN parks p ON p.id = e.park_id
+         ORDER BY e.id
+    """))
+
+
+@app.get("/api/parks/issues")
+def park_issues():
+    return json_query("""
+        SELECT coalesce(json_agg(json_build_object(
+                   'issue', i.issue, 'detail', i.detail,
+                   'park_id', i.park_id, 'park_entrance_id', i.entrance_id,
+                   'lon', round(ST_X(g.geom)::numeric, 6),
+                   'lat', round(ST_Y(g.geom)::numeric, 6))
+                   ORDER BY i.issue, i.park_id, i.entrance_id), '[]')::text
+          FROM park_issues i
+          LEFT JOIN parks p ON p.id = i.park_id
+          LEFT JOIN park_entrances e ON e.id = i.entrance_id
+          CROSS JOIN LATERAL (SELECT coalesce(ST_PointOnSurface(p.outline), e.geom) AS geom) g
+    """)
+
+
 # Area kinds: table, key column, the table linking the area to the
 # districts it lies in (none for a district), and kind-specific fields.
 AREAS = {
@@ -207,10 +263,17 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'share_500', m.share_500, 'share_1000', m.share_1000,
                        'planned_share_500', m.planned_share_500,
                        'planned_share_1000', m.planned_share_1000,
-                       'gain_500', m.planned_share_500 - m.share_500)) AS feature
+                       'gain_500', m.planned_share_500 - m.share_500,
+                       'park_share_300', k.share_300, 'park_share_800', k.share_800,
+                       'city_park_share_800', k.city_park_share_800,
+                       'sofiaplan_park_share', g.sofiaplan_share)) AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
+          LEFT JOIN area_park_access k
+                 ON k.area_kind = %(kind)s AND k.area_id = a.{a['key']}::text
+          LEFT JOIN park_access_agreement g
+                 ON g.area_kind = %(kind)s AND g.area_id = a.{a['key']}::text
          ORDER BY a.{a['key']}
     """), {"kind": kind})
 
@@ -238,6 +301,10 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                     'extra', {a['extra']},
                     'access', (SELECT row_to_json(m) FROM area_metro_access m
                                 WHERE m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text),
+                    'park_access', (SELECT row_to_json(k) FROM area_park_access k
+                                     WHERE k.area_kind = %(kind)s AND k.area_id = a.{a['key']}::text),
+                    'park_agreement', (SELECT row_to_json(g) FROM park_access_agreement g
+                                        WHERE g.area_kind = %(kind)s AND g.area_id = a.{a['key']}::text),
                     'districts', {districts},
                     'issues', (SELECT json_agg(json_build_object('issue', i.issue, 'detail', i.detail))
                                  FROM area_issues i
