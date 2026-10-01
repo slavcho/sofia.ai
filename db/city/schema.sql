@@ -471,3 +471,103 @@ SELECT area_kind, area_id,
   FROM levels
  WHERE area_id IS NOT NULL
  GROUP BY area_kind, area_id;
+
+-- ------------------------------------------- kindergartens and schools
+--
+-- Kindergartens, nurseries and schools as points (Sofiaplan, 2018-08-08).
+-- Filled by education.sql. A point is a site, not an institution: one
+-- kindergarten can have several buildings and branches, each a row.
+
+CREATE TABLE IF NOT EXISTS kindergartens (
+    id             integer PRIMARY KEY,       -- "id" in the source
+    name           text NOT NULL,             -- object_nam
+    number         integer,                   -- object_nom, the municipal number
+    kind           text NOT NULL CHECK (kind IN ('kindergarten', 'nursery', 'other')),  -- from the name
+    type_code      text,                      -- type in the source; contradicts its own code list
+    funding        text CHECK (funding IN ('state', 'municipal', 'private')),  -- NULL: unknown code
+    funding_code   text,                      -- finansiran in the source
+    is_branch      boolean NOT NULL,          -- "филиал" in the name, or osn_fil 2
+    status         text NOT NULL CHECK (status IN ('open', 'closed', 'doubtful')),  -- doubtful: the source doubts it
+    note           text,                      -- zabelezhka
+    address        text,
+    district_code  text REFERENCES districts(code),  -- kod_rayon, as the source says
+    details_url    text,
+    registration_id integer,                  -- dg_reg_karti id; municipal main sites only
+    groups         integer,                   -- registered groups (2018)
+    children       integer,                   -- registered children, all groups
+    nursery_children integer,                 -- of them in nursery groups (under 3)
+    geom           geometry(Point, 4326) NOT NULL,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS kindergartens_geom_idx ON kindergartens USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS schools (
+    id             integer PRIMARY KEY,       -- "id" in the source
+    name           text NOT NULL,
+    number         integer,                   -- object_nom
+    admin_code     integer,                   -- kodadmin, the ministry's code; NULL for 0
+    kind           text CHECK (kind IN ('primary', 'basic', 'secondary', 'profiled', 'vocational', 'special')),
+                                              -- type 1-6: НУ, ОУ, СОУ, профилирана, професионална, специална
+    funding        text CHECK (funding IN ('state', 'municipal', 'private')),
+    funding_code   text,
+    class_count    integer,                   -- br_paralel, as given; 0 often means not filled in
+    note           text,
+    address        text,
+    district_code  text REFERENCES districts(code),
+    details_url    text,
+    geom           geometry(Point, 4326) NOT NULL,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS schools_geom_idx ON schools USING gist (geom);
+
+CREATE OR REPLACE VIEW education_issues AS
+SELECT 'kindergarten closed or doubtful' AS issue, k.id AS kindergarten_id, NULL::integer AS school_id,
+       format('%s: %s', k.name, coalesce(k.note, k.status)) AS detail
+  FROM kindergartens k WHERE k.status <> 'open'
+UNION ALL
+SELECT 'unknown funding code', k.id, NULL, format('%s: finansiran %s', k.name, k.funding_code)
+  FROM kindergartens k WHERE k.funding IS NULL
+UNION ALL
+SELECT 'unknown funding code', NULL, s.id, format('%s: finansiran %s', s.name, coalesce(s.funding_code, 'missing'))
+  FROM schools s WHERE s.funding IS NULL
+UNION ALL
+-- Nurseries are not in the registration maps, so only kindergartens.
+SELECT 'municipal kindergarten without a registration map', k.id, NULL, k.name
+  FROM kindergartens k
+ WHERE k.funding = 'municipal' AND k.kind = 'kindergarten' AND NOT k.is_branch AND k.status = 'open'
+   AND k.registration_id IS NULL
+UNION ALL
+SELECT 'registration without groups', k.id, NULL, format('%s: registration %s', k.name, k.registration_id)
+  FROM kindergartens k WHERE k.registration_id IS NOT NULL AND k.children IS NULL
+UNION ALL
+SELECT 'number contradicts the name', k.id, NULL, format('%s: number %s', k.name, k.number)
+  FROM kindergartens k
+ WHERE k.name ~ '№ ?[0-9]' AND k.number IS DISTINCT FROM substring(k.name FROM '№ ?([0-9]+)')::integer
+UNION ALL
+SELECT 'private by name, not by funding', k.id, NULL, format('%s: %s', k.name, k.funding)
+  FROM kindergartens k WHERE k.name ~ '^"?Ч' AND k.funding IS DISTINCT FROM 'private'
+UNION ALL
+SELECT 'private by name, not by funding', NULL, s.id, format('%s: %s', s.name, s.funding)
+  FROM schools s WHERE s.name ~* '^"?Ч|частн' AND s.funding IS DISTINCT FROM 'private'
+UNION ALL
+SELECT 'school without an admin code', NULL, s.id, s.name
+  FROM schools s WHERE s.admin_code IS NULL
+UNION ALL
+SELECT 'admin code shared by schools', NULL, s.id, format('%s: %s', s.admin_code, s.name)
+  FROM schools s
+ WHERE (SELECT count(*) FROM schools o WHERE o.admin_code = s.admin_code) > 1
+UNION ALL
+SELECT 'school with no classes', NULL, s.id, s.name
+  FROM schools s WHERE s.class_count = 0
+UNION ALL
+SELECT 'outside its district', k.id, NULL, format('%s: says %s', k.name, k.district_code)
+  FROM kindergartens k
+ WHERE NOT EXISTS (SELECT 1 FROM districts d WHERE d.code = k.district_code AND ST_Intersects(d.geom, k.geom))
+UNION ALL
+SELECT 'outside its district', NULL, s.id, format('%s: says %s', s.name, s.district_code)
+  FROM schools s
+ WHERE NOT EXISTS (SELECT 1 FROM districts d WHERE d.code = s.district_code AND ST_Intersects(d.geom, s.geom));

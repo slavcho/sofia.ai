@@ -189,5 +189,57 @@ class ParkAccessTest(unittest.TestCase):
                AND buildings > 0"""), 0)
 
 
+class EducationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.kindergartens").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.kindergartens is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_every_point_is_loaded(self):
+        self.assertEqual(self.scalar("""
+            SELECT (SELECT count(*) FROM city.kindergartens) || '/' || (SELECT count(*) FROM city.schools)"""),
+            "397/275")
+
+    def test_every_registration_is_on_its_kindergarten(self):
+        # Matched by number, which is wrong for some sites; the name has it right.
+        self.assertEqual(self.scalar("""
+            SELECT count(*)
+              FROM urban.features f
+              JOIN urban.layers l ON l.id = f.layer_id
+              LEFT JOIN city.kindergartens k ON k.registration_id = (f.properties->>'id')::integer
+             WHERE l.source_path LIKE '%dg_reg_karti_26_sofpr_20180808.geojson'
+               AND (k.id IS NULL OR k.is_branch
+                    OR k.name !~ ('№ ?' || (f.properties->>'nomer') || '([^0-9]|$)'))"""), 0)
+
+    def test_a_registration_is_used_once(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) - count(DISTINCT registration_id) FROM city.kindergartens
+             WHERE registration_id IS NOT NULL"""), 0)
+
+    def test_nursery_children_are_part_of_all_children(self):
+        # ДГ №197 has a registration but no groups: unknown, not zero.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.kindergartens
+             WHERE nursery_children > children
+                OR (children IS NULL) <> (nursery_children IS NULL)"""), 0)
+
+    def test_branch_by_name_is_a_branch(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.kindergartens WHERE name ~* 'филиал' AND NOT is_branch"""), 0)
+
+    def test_every_school_has_a_kind(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.schools WHERE kind IS NULL"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
