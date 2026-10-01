@@ -250,3 +250,60 @@ UNION ALL
 SELECT 'inhabited building outside every district', 'building', b.id::text, NULL,
        format('%s people', b.people)
   FROM building_residents b WHERE b.district_code IS NULL;
+
+-- ---------------------------------------------------------- metro access
+--
+-- Straight-line distance from each inhabited building to the nearest
+-- station outline. Real walking distance is longer (typically 20-40 %),
+-- so these numbers are an upper bound on how many people are within reach.
+
+CREATE TABLE IF NOT EXISTS building_metro_access (
+    building_id         integer PRIMARY KEY REFERENCES building_residents(id) ON DELETE CASCADE,
+    station_id          integer REFERENCES metro_stations(id) ON DELETE SET NULL,  -- nearest existing
+    distance_m          numeric,
+    planned_station_id  integer REFERENCES metro_stations(id) ON DELETE SET NULL,  -- nearest, planned included
+    planned_distance_m  numeric
+);
+
+-- Residents within 500 m and 1 km of a station, now and with the planned
+-- stations, for every district, neighbourhood, planning unit and the city.
+CREATE OR REPLACE VIEW area_metro_access AS
+WITH b AS (
+    SELECT r.people, r.district_code, r.neighbourhood_id, r.planning_unit_id,
+           a.distance_m, a.planned_distance_m
+      FROM building_residents r
+      JOIN building_metro_access a ON a.building_id = r.id
+), levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, b.* FROM b
+    UNION ALL SELECT 'district', b.district_code, b.* FROM b
+    UNION ALL SELECT 'neighbourhood', b.neighbourhood_id::text, b.* FROM b
+    UNION ALL SELECT 'planning_unit', b.planning_unit_id::text, b.* FROM b
+)
+SELECT area_kind, area_id,
+       sum(people) AS people,
+       coalesce(sum(people) FILTER (WHERE distance_m <= 500), 0) AS within_500,
+       coalesce(sum(people) FILTER (WHERE distance_m <= 1000), 0) AS within_1000,
+       coalesce(sum(people) FILTER (WHERE planned_distance_m <= 500), 0) AS planned_within_500,
+       coalesce(sum(people) FILTER (WHERE planned_distance_m <= 1000), 0) AS planned_within_1000,
+       round(coalesce(sum(people) FILTER (WHERE distance_m <= 500), 0)::numeric / nullif(sum(people), 0), 3) AS share_500,
+       round(coalesce(sum(people) FILTER (WHERE distance_m <= 1000), 0)::numeric / nullif(sum(people), 0), 3) AS share_1000,
+       round(coalesce(sum(people) FILTER (WHERE planned_distance_m <= 500), 0)::numeric / nullif(sum(people), 0), 3) AS planned_share_500,
+       round(coalesce(sum(people) FILTER (WHERE planned_distance_m <= 1000), 0)::numeric / nullif(sum(people), 0), 3) AS planned_share_1000
+  FROM levels
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;
+
+-- Residents around each station. Catchments overlap, so these do not add
+-- up to the city total; "nearest" counts each building once.
+CREATE OR REPLACE VIEW station_catchment AS
+SELECT s.id AS station_id,
+       (SELECT coalesce(sum(r.people), 0) FROM building_residents r
+         WHERE r.geom && ST_Expand(s.outline, 0.01)
+           AND ST_DWithin(r.geom::geography, s.outline::geography, 500)) AS within_500,
+       (SELECT coalesce(sum(r.people), 0) FROM building_residents r
+         WHERE r.geom && ST_Expand(s.outline, 0.02)
+           AND ST_DWithin(r.geom::geography, s.outline::geography, 1000)) AS within_1000,
+       (SELECT coalesce(sum(r.people), 0) FROM building_residents r
+          JOIN building_metro_access a ON a.building_id = r.id
+         WHERE a.station_id = s.id OR (s.status = 'planned' AND a.planned_station_id = s.id)) AS nearest_for
+  FROM metro_stations s;
