@@ -363,3 +363,43 @@ class SchoolCatchmentTest(unittest.TestCase):
         self.assertEqual(self.scalar("""
             SELECT count(*) FROM city.catchment_schools c JOIN city.schools s ON s.id = c.school_id
              WHERE substring(s.name from '^(\\d+)') <> substring(c.name from '^(\\d+)')"""), 0)
+
+
+class BuildingCatchmentTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.building_school_catchment").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.building_school_catchment is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        with self.conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchone()[0]
+
+    def test_buildings_take_only_a_near_address(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_school_catchment WHERE address_distance_m > 30"""), 0)
+
+    def test_assigned_school_is_never_nearer_than_the_nearest(self):
+        # The nearest is among basic and secondary schools, so this holds
+        # for an assigned school of those kinds.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_school_catchment b JOIN city.schools s ON s.id = b.school_id
+             WHERE s.kind IN ('basic', 'secondary') AND b.school_distance_m < b.nearest_school_distance_m"""), 0)
+
+    def test_city_counts_every_child(self):
+        self.assertEqual(
+            self.scalar("""SELECT children FROM city.area_school_catchment WHERE area_kind = 'city'"""),
+            self.scalar("SELECT sum(age_0_14) FROM city.building_residents"))
+
+    def test_most_children_have_a_catchment(self):
+        # 93.6% when written.
+        self.assertGreater(self.scalar("""
+            SELECT known_share FROM city.area_school_catchment WHERE area_kind = 'city'"""), 0.9)

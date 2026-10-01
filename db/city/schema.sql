@@ -779,3 +779,61 @@ SELECT 'addresses over 5 km from their school', a.list_school_id, a.district_cod
   JOIN schools s ON s.id = c.school_id
  WHERE ST_Distance(a.geom::geography, s.geom::geography) > 5000
  GROUP BY a.list_school_id, a.district_code, a.town, s.name;
+
+-- Each inhabited building (2019) in the catchment of the nearest placed
+-- list address within 30 m (median 5 m): the school it is assigned to,
+-- against the nearest school that teaches grades 1-7 (basic or
+-- secondary). A building with no placed address that near has no row
+-- here: its catchment is unknown, not missing.
+CREATE TABLE IF NOT EXISTS building_school_catchment (
+    building_id    integer PRIMARY KEY REFERENCES building_residents(id) ON DELETE CASCADE,
+    address_id     integer NOT NULL REFERENCES catchment_addresses(id) ON DELETE CASCADE,
+    address_distance_m numeric NOT NULL,
+    list_school_id integer NOT NULL REFERENCES catchment_schools(list_id),
+    school_id      integer REFERENCES schools(id) ON DELETE SET NULL,  -- NULL: not in the 2018 schools
+    school_distance_m numeric,                -- straight line to the assigned school
+    nearest_school_id integer REFERENCES schools(id) ON DELETE SET NULL,
+    nearest_school_distance_m numeric
+);
+CREATE INDEX IF NOT EXISTS building_school_catchment_school_idx ON building_school_catchment (list_school_id);
+
+-- Shares are of children aged 0-14 in buildings whose catchment is known.
+CREATE OR REPLACE VIEW area_school_catchment AS
+WITH b AS (
+    SELECT r.age_0_14 AS children, r.district_code, r.neighbourhood_id, r.planning_unit_id,
+           c.building_id IS NOT NULL AS known, c.school_distance_m AS d,
+           c.school_id = c.nearest_school_id AS is_nearest,
+           c.school_distance_m - c.nearest_school_distance_m AS extra_m
+      FROM building_residents r LEFT JOIN building_school_catchment c ON c.building_id = r.id
+), levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, b.* FROM b
+    UNION ALL SELECT 'district', b.district_code, b.* FROM b
+    UNION ALL SELECT 'neighbourhood', b.neighbourhood_id::text, b.* FROM b
+    UNION ALL SELECT 'planning_unit', b.planning_unit_id::text, b.* FROM b
+)
+SELECT area_kind, area_id,
+       sum(children) AS children,
+       coalesce(sum(children) FILTER (WHERE known), 0) AS children_known,
+       round(coalesce(sum(children) FILTER (WHERE known), 0)::numeric / nullif(sum(children), 0), 3) AS known_share,
+       round(coalesce(sum(children) FILTER (WHERE d <= 800), 0)::numeric
+             / nullif(sum(children) FILTER (WHERE d IS NOT NULL), 0), 3) AS assigned_share_800,
+       round(coalesce(sum(children) FILTER (WHERE is_nearest), 0)::numeric
+             / nullif(sum(children) FILTER (WHERE d IS NOT NULL), 0), 3) AS assigned_nearest_share,
+       -- assigned to a school at least 400 m farther than the nearest
+       round(coalesce(sum(children) FILTER (WHERE extra_m >= 400), 0)::numeric
+             / nullif(sum(children) FILTER (WHERE d IS NOT NULL), 0), 3) AS assigned_farther_share,
+       round((percentile_cont(0.5) WITHIN GROUP (ORDER BY d))::numeric) AS median_assigned_m
+  FROM levels
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;
+
+-- Per list school: the buildings and children in its catchment.
+CREATE OR REPLACE VIEW catchment_school_children AS
+SELECT c.list_id, c.school_id, count(b.building_id) AS buildings,
+       coalesce(sum(r.age_0_14), 0) AS children,
+       round((percentile_cont(0.5) WITHIN GROUP (ORDER BY b.school_distance_m))::numeric) AS median_distance_m,
+       count(b.building_id) FILTER (WHERE b.school_id = b.nearest_school_id) AS buildings_nearest
+  FROM catchment_schools c
+  LEFT JOIN building_school_catchment b ON b.list_school_id = c.list_id
+  LEFT JOIN building_residents r ON r.id = b.building_id
+ GROUP BY c.list_id, c.school_id;
