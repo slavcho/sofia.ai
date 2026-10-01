@@ -2,7 +2,8 @@
 
 Problems found in the source data of https://urbandata.sofia.bg/, one entry
 per kind of problem. Single rows that show the problem are listed by the
-issue views in the database (`city.metro_issues`, `city.area_issues`); this
+issue views in the database (`city.metro_issues`, `city.area_issues`,
+`city.park_issues`, `city.education_issues`); this
 file records what we know about each kind: where it comes from, what it
 affects, and what we did about it.
 
@@ -43,6 +44,18 @@ When you add an entry, give it the next number and keep the fields.
 | 21 | Most parks have no name | parks | flagged |
 | 22 | Parks layer includes places that may not be public | parks | open |
 | 23 | Sofiaplan's park access method is not documented | parks | flagged |
+| 24 | Kindergarten type codes contradict their own code list | education | worked around |
+| 25 | Kindergarten numbers that contradict the name | education | worked around |
+| 26 | Funding codes that are unknown or contradict the name | education | flagged |
+| 27 | Closed and unconfirmed kindergartens in the layer | education | worked around |
+| 28 | Registration maps are incomplete | education | flagged |
+| 29 | School admin codes shared or missing | education | flagged |
+| 30 | Schools with 0 classes | education | flagged |
+| 31 | Kindergartens outside their stated district | education | flagged |
+| 32 | Kindergartens and schools are as of 2018 | education | open |
+| 33 | Sofiaplan's 2021 not-served method is not documented | education | flagged |
+| 34 | Sofiaplan's 2019 school reach has sites we lack | education | open |
+| 35 | Areas where Sofiaplan's not-served shares and ours disagree | education | open |
 
 ## Metro
 
@@ -299,3 +312,167 @@ When you add an entry, give it the next number and keep the fields.
 - **Handling:** compared point by point in `park_access_sofiaplan`; no
   contradiction found (no "with" building lacks an entrance within 400 m).
 - **Check:** `park_access_agreement`.
+
+## Kindergartens and schools
+
+### 24. Kindergarten type codes contradict their own code list
+
+- **Status:** worked around.
+- **Source:** `kindergarten-locations-point` (2018-08-08), field `type`;
+  `kindergarten-type` (`dg_kod_type`: 0 other, 1 ДГ, 2 ДГЯ, 3 ЧДГ, 4 ЧДГЯ, 5 ДЯ).
+- **What:** municipal kindergartens (ДГ) have type 1 or 4, municipal
+  nurseries (ДЯ, СДЯ) have 2, private ones (ЧДГ) have 1, and 126 points
+  have no type. Type 4 should be a private kindergarten with a nursery.
+- **Handling:** `education.sql` reads the kind from the name: ДЯ, СДЯ and
+  ЧДЯ are nurseries; family-type centres, the ДДЛРГ children's home and
+  the children's centre in Надежда are "other"; the rest are
+  kindergartens. The raw code stays in `type_code`. The school types
+  (`uchilishta_kod_type`) do follow their list.
+
+### 25. Kindergarten numbers that contradict the name
+
+- **Status:** worked around.
+- **Source:** `kindergarten-locations-point`, field `object_nom`.
+- **What:** ДГ №76 "Сърничка" has number 78, ДГ №139 "Панорама" has 39 and
+  СДЯ №41 has 0. Matching by number puts the registration of ДГ №76 on
+  the wrong kindergarten, or on none.
+- **Handling:** the registration maps are matched by the number in the
+  name too, nearest main site first. All 194 end up on the kindergarten
+  whose name carries their number, at 0 m.
+- **Check:** `education_issues`, "number contradicts the name".
+
+### 26. Funding codes that are unknown or contradict the name
+
+- **Status:** flagged.
+- **Source:** `kindergarten-locations-point` and `school-locations-points`,
+  field `finansiran` (1 state, 2 municipal, 3 private, by the names).
+- **What:** ДГ №60 "Бор" and ДГ №112 "Детски свят" (special needs) have
+  code 4, which is not explained. Първа английска езикова гимназия and the
+  practice building of НПГПТО "М. В. Ломоносов" have none. ЧДГ "В парка",
+  ЧДГ "Светлина" and Частно ОУ "Д-р Мария Монтесори" are private by name
+  but municipal by code.
+- **Impact:** small. The two code 4 kindergartens count as kindergartens,
+  but not as municipal ones.
+- **Check:** `education_issues`, "unknown funding code" and "private by
+  name, not by funding".
+
+### 27. Closed and unconfirmed kindergartens in the layer
+
+- **Status:** worked around.
+- **Source:** `kindergarten-locations-point`, fields `chek`, `status` and
+  `zabelezhka`.
+- **What:** 9 points have `chek` 2. 3 private kindergartens are marked
+  "закрита". The notes say the authors could not confirm 5 others
+  (СДЯ №44, СДЯ №48, СДЯ №56, ЧДГ "Палави крачета", the ДГ №121 branch in
+  Доброславци), and one is a care centre.
+- **Handling:** `status` is closed or doubtful. Only open kindergartens
+  count in `building_education_access`.
+- **Check:** `education_issues`, "kindergarten closed or doubtful".
+
+### 28. Registration maps are incomplete
+
+- **Status:** flagged.
+- **Source:** `registration-maps-kindergartens` and
+  `registration-maps-groups-kindergartens` (2018-08-08).
+- **What:** the maps cover 194 municipal kindergartens, not the nurseries
+  or private ones. ДГ №197 "Китна градина" has a map but no groups. Three
+  open "municipal" main sites have no map: the kindergarten for children
+  with impaired hearing, and the two private ones from issue 26.
+  `broi_deca` is not explained: it could be places or enrolled children.
+- **Handling:** where there are no groups the child counts are NULL, not
+  0. `registered_children` in `area_education_access` is only a hint of
+  capacity.
+- **Check:** `education_issues`, "registration without groups" and
+  "municipal kindergarten without a registration map".
+
+### 29. School admin codes shared or missing
+
+- **Status:** flagged.
+- **Source:** `school-locations-points`, field `kodadmin` (the ministry code).
+- **What:** 6 schools have 0, among them four special schools (ЦСОП) and
+  two private ones. Five codes are shared by two points each. Two are
+  buildings of one school (НПГПТО "Ломоносов", "Веда"), and Уланова has
+  two names. But 19 СУ and 132 СУ share 2209132, and 129 ОУ and 175 ОУ
+  share 2203175: the code belongs to one of them.
+- **Impact:** none yet. It will matter when schools are linked by code to
+  other data (e.g. the ministry's).
+- **Check:** `education_issues`, "school without an admin code" and "admin
+  code shared by schools".
+
+### 30. Schools with 0 classes
+
+- **Status:** flagged.
+- **Source:** `school-locations-points`, field `br_paralel`.
+- **What:** 65 of 275 schools have 0. Most are private or state (35
+  private, 22 state), but 8 are municipal. 0 most likely means not filled
+  in.
+- **Impact:** `class_count` cannot be used as a size of a school yet.
+- **Check:** `education_issues`, "school with no classes".
+
+### 31. Kindergartens outside their stated district
+
+- **Status:** flagged.
+- **Source:** `kindergarten-locations-point`, field `kod_rayon`.
+- **What:** ЧЦДГ "Еко Дара" and ЧЦДГ "Германи" say Витоша (17) but lie in
+  Панчарево (23). ЧДГ "В парка" says Лозенец (09) but lies in Триадица
+  (10). Either the point or the code is wrong.
+- **Check:** `education_issues`, "outside its district".
+
+### 32. Kindergartens and schools are as of 2018
+
+- **Status:** open.
+- **Source:** all the education layers are dated 2018-08-08.
+- **What:** kindergartens opened since then, the new municipal ones among
+  them, are missing, and some closed ones may still be there.
+- **Impact:** access is likely understated in the newer parts of the
+  city.
+- **Handling:** to do: find a newer list (the municipal register, or the
+  ministry's for schools).
+
+### 33. Sofiaplan's 2021 not-served method is not documented
+
+- **Status:** flagged.
+- **Source:** `pedestrian-access-to-schools-and-municipal-kindergartens-share-of-unserved-population`
+  (2021, 228 areas).
+- **What:** the distance is not given. Their city share not served (14.8 %
+  for municipal kindergartens, 23.4 % for schools) lies between ours at
+  400 m (19.5 %, 30.7 %) and 500 m (10.3 %, 16.1 %) straight. Per area, ours
+  at 500 m correlates at 0.93 and 0.87. That fits a 500 m walk. Their
+  `ppl_all` totals 1.52 M against 1.13 M in our buildings; `dens30_ppl` is
+  not explained.
+- **Handling:** compared at both 400 and 500 m in
+  `education_unserved_sofiaplan`, by share, not by people.
+
+### 34. Sofiaplan's 2019 school reach has sites we lack
+
+- **Status:** open.
+- **Source:** `school-accessibility-400-800-1200-2000-m`, file
+  `uchilishta_merged_400_800_1200m_25_sofpr_20190000` (despite the name,
+  there is no 2000 m area).
+- **What:** walking is never shorter than a straight line, yet 25 of the
+  15,572 buildings they put within 400 m of a school are farther from any
+  of our 275 schools. 13 are in Горубляне, up to 928 m from our nearest
+  school (82 ОУ, 84 ОУ). 11 are near the Американски колеж, and one is in
+  Дружба 2. 63 buildings are similar at 800 m. Sofiaplan had a school site
+  there that the 2018 points do not.
+- **Handling:** to do: find which school it is.
+- **Check:** `school_access_agreement`, `sofiaplan_only_400`.
+
+### 35. Areas where Sofiaplan's not-served shares and ours disagree
+
+- **Status:** open.
+- **Source:** as issue 33.
+- **What:** Sofiaplan's figure first, then ours at 500 m straight:
+  - ж.к. Яворов: 12 % of people not served by a school, against 84 %.
+  - м. Триъгълника (Надежда): 66 % for schools, against 0 %.
+  - Карпузица – изток: 65 % for schools, against 0 %.
+  - ЦГЧ зони Б2: 1 % for kindergartens, against 61 %.
+  
+  In the first and last, one of the two sets lacks a school or a
+  kindergarten; in the middle two, ours has one theirs did not.
+- **Not an issue:** Факултета. Both find most of it without a
+  kindergarten nearby: 78 % of people for Sofiaplan, 91 % for us. With
+  3,213 children aged 0–14 and no registered places, it is the largest gap
+  in the city. Both rest on municipal data, so it is worth a check on
+  the ground.
+- **Check:** `education_unserved_sofiaplan`.
