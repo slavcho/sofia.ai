@@ -316,3 +316,50 @@ class EducationAccessTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchoolCatchmentTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.catchment_addresses").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.catchment_addresses is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_every_list_row_is_loaded(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.catchment_addresses"), 106629)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.catchment_schools"), 159)
+
+    def test_most_addresses_are_placed(self):
+        # 92.9% when written; a drop means a key stopped matching.
+        self.assertGreater(self.scalar("""
+            SELECT avg((geom IS NOT NULL)::int) FROM city.catchment_addresses"""), 0.9)
+
+    def test_a_point_is_not_both_a_street_and_an_area(self):
+        # Ж.К.ГОЦЕ ДЕЛЧЕВ 113 is a block of the estate, not бул. Гоце
+        # Делчев 113. (One street under two names in the list is the
+        # list's own repeat: DATA_ISSUES.)
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM (
+                SELECT address_fid FROM city.catchment_addresses
+                 WHERE address_fid IS NOT NULL
+                 GROUP BY address_fid
+                HAVING count(DISTINCT street ~ '^(УЛ|БУЛ|ПЛ)\\.') > 1) q"""), 0)
+
+    def test_estates_are_placed_by_block(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.catchment_addresses
+             WHERE street ~ '^Ж\\.К\\.' AND match = 'street'"""), 0)
+
+    def test_school_matches_its_number(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.catchment_schools c JOIN city.schools s ON s.id = c.school_id
+             WHERE substring(s.name from '^(\\d+)') <> substring(c.name from '^(\\d+)')"""), 0)

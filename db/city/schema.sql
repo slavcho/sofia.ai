@@ -717,3 +717,65 @@ CREATE TABLE IF NOT EXISTS education_unserved_sofiaplan (
     source_fid     text NOT NULL
 );
 CREATE INDEX IF NOT EXISTS education_unserved_sofiaplan_geom_idx ON education_unserved_sofiaplan USING gist (geom);
+
+-- Assigned schools (прилежащи училища): the city's list of the addresses
+-- each school (СУ or ОУ) takes first, as of 2026-06-30. It names the
+-- address as street and number (or estate and block) with no
+-- coordinates; school_catchments.sql finds each one among the official
+-- address points (address_sofia). The schools are matched to our 2018
+-- points, so a school opened since then has no school_id.
+CREATE TABLE IF NOT EXISTS catchment_schools (
+    list_id        integer PRIMARY KEY,       -- "ИД на прилежащо училище"
+    name           text NOT NULL,             -- "Прилежащо училище"
+    school_id      integer REFERENCES schools(id) ON DELETE SET NULL,
+    match          text CHECK (match IN ('number_and_type', 'number')),  -- NULL: not found
+    addresses      integer NOT NULL,          -- rows in the list
+    located        integer NOT NULL,          -- of them found among the address points
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS catchment_addresses (
+    id             integer PRIMARY KEY,       -- OBJECTID
+    list_school_id integer NOT NULL REFERENCES catchment_schools(list_id),
+    border_list_ids integer[] NOT NULL DEFAULT '{}',  -- "ИД на гранични прилежащи училища"
+    district_code  text REFERENCES districts(code),
+    town           text NOT NULL,             -- as given, e.g. ГР.СОФИЯ,КВ.ДРАГАЛЕВЦИ
+    street         text,                      -- street, estate (Ж.К.) or quarter (КВ.)
+    number         text,                      -- house number, or block for an estate
+    entrance       text,
+    match          text CHECK (match IN ('street', 'block', 'alternative_name')),  -- NULL: not found
+    address_fid    text,                      -- the address_sofia point
+    geom           geometry(Point, 4326),
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS catchment_addresses_geom_idx ON catchment_addresses USING gist (geom);
+CREATE INDEX IF NOT EXISTS catchment_addresses_school_idx ON catchment_addresses (list_school_id);
+
+CREATE OR REPLACE VIEW catchment_issues AS
+SELECT 'list school not in the 2018 schools' AS issue, c.list_id, NULL::text AS district_code,
+       NULL::text AS street, c.name || ' (' || c.addresses || ' addresses)' AS detail
+  FROM catchment_schools c WHERE c.school_id IS NULL
+UNION ALL
+SELECT 'list school matched by number only', c.list_id, NULL, NULL,
+       c.name || ' → ' || s.name
+  FROM catchment_schools c JOIN schools s ON s.id = c.school_id WHERE c.match = 'number'
+UNION ALL
+-- One row per street, not per address: most misses are whole streets.
+SELECT 'address not among the address points', NULL, a.district_code, a.street,
+       a.town || ', ' || a.street || ': ' || count(*) || ' addresses'
+  FROM catchment_addresses a WHERE a.match IS NULL
+ GROUP BY a.district_code, a.town, a.street
+UNION ALL
+-- Mostly villages with no school of their own (Долни Богров, Желява):
+-- a fact about the list, worth seeing, not necessarily an error.
+SELECT 'addresses over 5 km from their school', a.list_school_id, a.district_code, NULL,
+       a.town || ' → ' || s.name || ': ' || count(*) || ' addresses, about '
+         || round(avg(ST_Distance(a.geom::geography, s.geom::geography))::numeric / 1000, 1) || ' km'
+  FROM catchment_addresses a
+  JOIN catchment_schools c ON c.list_id = a.list_school_id
+  JOIN schools s ON s.id = c.school_id
+ WHERE ST_Distance(a.geom::geography, s.geom::geography) > 5000
+ GROUP BY a.list_school_id, a.district_code, a.town, s.name;
