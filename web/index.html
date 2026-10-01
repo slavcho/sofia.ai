@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sofia.ai — Metro</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f7f7f8; --text: #1d1f23; --muted: #6b7079;
+    --border: #e3e4e8; --accent: #1e6fb8;
+    --ok: #2ba84a; --warn: #e89a00; --bad: #d93a3a; --unknown: #9aa0a8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #17191d; --panel: #1f2227; --text: #e8e9ec; --muted: #9aa0a8;
+            --border: #30343b; --accent: #5aa2e8; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; }
+  #side { width: 340px; flex: none; height: 100%; overflow-y: auto;
+          background: var(--panel); border-right: 1px solid var(--border); padding: 16px; }
+  #map { flex: 1; height: 100%; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--muted); margin: 20px 0 8px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  label.toggle { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+  .line { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .chip { display: inline-block; min-width: 28px; padding: 1px 6px; border-radius: 4px;
+          color: #fff; font-weight: 600; font-size: 12px; text-align: center; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  #info { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  #info h3 { margin: 0 0 6px; font-size: 16px; }
+  #info dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0 0; font-size: 12px; }
+  #info dt { color: var(--muted); }
+  #info dd { margin: 0; overflow-wrap: anywhere; }
+  #info ul { margin: 6px 0 0; padding-left: 0; list-style: none; font-size: 12px; }
+  #info li { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+  .status { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
+  .issue { padding: 6px 8px; margin: 0 -8px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .issue:hover { background: var(--bg); }
+  .issue b { font-weight: 600; }
+  details summary { cursor: pointer; font-size: 13px; padding: 3px 0; }
+  .empty { color: var(--muted); font-size: 12px; }
+  @media (max-width: 720px) {
+    body { flex-direction: column-reverse; }
+    #side { width: 100%; height: 45%; border-right: 0; border-top: 1px solid var(--border); }
+    #map { height: 55%; }
+  }
+</style>
+</head>
+<body>
+<aside id="side">
+  <h1>Sofia metro</h1>
+  <div class="sub">Stations 2021 · entrances 2020 (OSM) · urbandata.sofia.bg</div>
+
+  <h2>Layers</h2>
+  <label class="toggle"><input type="checkbox" data-layers="stations,station-labels" checked> Stations</label>
+  <label class="toggle"><input type="checkbox" data-layers="outlines-fill,outlines-line" checked> Station outlines</label>
+  <label class="toggle"><input type="checkbox" data-layers="entrances" checked> Entrances</label>
+  <label class="toggle"><input type="checkbox" data-layers="tracks-existing,tracks-planned" checked> Track</label>
+  <label class="toggle"><input type="checkbox" id="show-planned" checked> Planned stations</label>
+
+  <h2>Lines</h2>
+  <div id="lines"></div>
+
+  <h2>Entrances: wheelchair access</h2>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--ok)"></i>yes</span>
+    <span><i class="dot" style="background:var(--warn)"></i>limited</span>
+    <span><i class="dot" style="background:var(--bad)"></i>no</span>
+    <span><i class="dot" style="background:var(--unknown)"></i>not tagged</span>
+  </div>
+
+  <h2>Selected</h2>
+  <div id="info"><div class="empty">Click a station or an entrance on the map.</div></div>
+
+  <h2>Data issues</h2>
+  <div id="issues"></div>
+</aside>
+<div id="map"></div>
+
+<script>
+const COLORS = { yes: '#2ba84a', limited: '#e89a00', no: '#d93a3a', unknown: '#9aa0a8' };
+const PLANNED = '#8a8f98';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// MapLibre hands array properties back as JSON strings.
+const arr = v => Array.isArray(v) ? v : (typeof v === 'string' && v.startsWith('[') ? JSON.parse(v) : []);
+const getJSON = url => fetch(url).then(r => { if (!r.ok) throw new Error(url + ': ' + r.status); return r.json(); });
+
+const map = new maplibregl.Map({
+  container: 'map',
+  center: [23.32, 42.69], zoom: 11.5,
+  style: {
+    version: 8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    sources: { osm: { type: 'raster', tileSize: 256,
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · data: <a href="https://urbandata.sofia.bg/">urbandata.sofia.bg</a>' } },
+    layers: [{ id: 'osm', type: 'raster', source: 'osm',
+               paint: { 'raster-saturation': -0.6, 'raster-opacity': 0.85 } }]
+  }
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }));
+
+let lines = {}, stations = null, entrances = null;
+
+map.on('load', async () => {
+  const [lineList, st, outlines, en, tracks, issues] = await Promise.all([
+    getJSON('/api/metro/lines'), getJSON('/api/metro/stations'),
+    getJSON('/api/metro/stations?shape=outline'), getJSON('/api/metro/entrances'),
+    getJSON('/api/metro/tracks'), getJSON('/api/metro/issues')]);
+  lineList.forEach(l => lines[l.code] = l);
+  stations = st; entrances = en;
+
+  map.addSource('tracks', { type: 'geojson', data: tracks });
+  map.addSource('outlines', { type: 'geojson', data: outlines });
+  map.addSource('stations', { type: 'geojson', data: st });
+  map.addSource('entrances', { type: 'geojson', data: en });
+  map.addSource('selected', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+  map.addLayer({ id: 'tracks-existing', type: 'line', source: 'tracks',
+    filter: ['==', ['get', 'status'], 'existing'],
+    paint: { 'line-color': '#3b3f46', 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 5] } });
+  map.addLayer({ id: 'tracks-planned', type: 'line', source: 'tracks',
+    filter: ['==', ['get', 'status'], 'planned'],
+    paint: { 'line-color': PLANNED, 'line-dasharray': [2, 2],
+             'line-width': ['interpolate', ['linear'], ['zoom'], 11, 1.5, 16, 4] } });
+  map.addLayer({ id: 'outlines-fill', type: 'fill', source: 'outlines', minzoom: 14,
+    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.25 } });
+  map.addLayer({ id: 'outlines-line', type: 'line', source: 'outlines', minzoom: 14,
+    paint: { 'line-color': ['get', 'color'], 'line-width': 1.5,
+             'line-dasharray': ['case', ['==', ['get', 'status'], 'planned'], ['literal', [2, 1]], ['literal', [1, 0]]] } });
+  map.addLayer({ id: 'selected', type: 'circle', source: 'selected',
+    paint: { 'circle-radius': 14, 'circle-color': 'rgba(0,0,0,0)',
+             'circle-stroke-color': '#ffcc00', 'circle-stroke-width': 3 } });
+  map.addLayer({ id: 'entrances', type: 'circle', source: 'entrances', minzoom: 13,
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 2.5, 17, 6],
+             'circle-color': ['match', ['get', 'wheelchair'],
+                              'yes', COLORS.yes, 'limited', COLORS.limited, 'no', COLORS.no, COLORS.unknown],
+             'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  map.addLayer({ id: 'stations', type: 'circle', source: 'stations',
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 15, 9],
+             'circle-color': ['case', ['==', ['get', 'status'], 'planned'], '#ffffff', ['get', 'color']],
+             'circle-stroke-color': ['case', ['==', ['get', 'status'], 'planned'], PLANNED, '#ffffff'],
+             'circle-stroke-width': 2 } });
+  map.addLayer({ id: 'station-labels', type: 'symbol', source: 'stations', minzoom: 12.5,
+    layout: { 'text-field': ['coalesce', ['get', 'name'], ''], 'text-size': 12,
+              'text-font': ['Noto Sans Regular'],
+              'text-offset': [0, 1.1], 'text-anchor': 'top', 'text-optional': true },
+    paint: { 'text-color': '#1d1f23', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
+
+  renderLines();
+  renderIssues(issues);
+  bindToggles();
+
+  for (const id of ['stations', 'outlines-fill']) {
+    map.on('click', id, e => selectStation(e.features[0].properties.id));
+    map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
+  }
+  map.on('click', 'entrances', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: ['stations'] }).length) return;
+    selectEntrance(e.features[0].properties.id);
+  });
+  map.on('mouseenter', 'entrances', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'entrances', () => map.getCanvas().style.cursor = '');
+
+  // ?station=<id> or ?entrance=<id> opens the page on that object, so it can be shared.
+  const q = new URLSearchParams(location.search);
+  if (q.has('station')) selectStation(+q.get('station'), false);
+  else if (q.has('entrance')) selectEntrance(+q.get('entrance'), false);
+});
+
+function remember(kind, id) {
+  history.replaceState(null, '', `?${kind}=${id}`);
+}
+
+function chip(code) {
+  const l = lines[code];
+  return `<span class="chip" style="background:${l ? l.color : PLANNED}">${esc(code)}</span>`;
+}
+
+function renderLines() {
+  document.getElementById('lines').innerHTML = Object.values(lines).map(l =>
+    `<div class="line">${chip(l.code)} <span>${esc(l.name)}<br>
+     <span class="sub">${l.stations} stations · since ${esc(l.opened.slice(0, 4))}</span></span></div>`).join('') +
+    `<div class="line"><i class="dot" style="background:#fff;border:2px solid ${PLANNED}"></i>
+     <span class="sub">planned (line not given in the data)</span></div>`;
+}
+
+function renderIssues(issues) {
+  const groups = {};
+  issues.forEach(i => (groups[i.issue] ||= []).push(i));
+  const box = document.getElementById('issues');
+  if (!issues.length) { box.innerHTML = '<div class="empty">None.</div>'; return; }
+  box.innerHTML = Object.entries(groups).map(([name, list]) =>
+    `<details><summary>${esc(name)} (${list.length})</summary>` +
+    list.map((i, n) => `<div class="issue" data-g="${esc(name)}" data-n="${n}">
+       <b>${esc(i.detail || (i.station_id ? 'station #' + i.station_id : 'entrance #' + i.entrance_id))}</b></div>`).join('') +
+    '</details>').join('');
+  box.onclick = e => {
+    const el = e.target.closest('.issue'); if (!el) return;
+    const i = groups[el.dataset.g][+el.dataset.n];
+    if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
+  };
+}
+
+function bindToggles() {
+  document.querySelectorAll('input[data-layers]').forEach(cb => cb.onchange = () =>
+    cb.dataset.layers.split(',').forEach(id =>
+      map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none')));
+  document.getElementById('show-planned').onchange = e => {
+    const f = e.target.checked ? null : ['==', ['get', 'status'], 'existing'];
+    ['stations', 'station-labels', 'outlines-fill', 'outlines-line'].forEach(id => map.setFilter(id, f));
+    map.setFilter('tracks-planned', e.target.checked ? ['==', ['get', 'status'], 'planned'] : ['==', 1, 0]);
+  };
+}
+
+function moveTo(center, zoom, animate) {
+  const view = { center, zoom: Math.max(map.getZoom(), zoom) };
+  animate === false ? map.jumpTo(view) : map.flyTo(view);
+}
+
+function highlight(coords) {
+  map.getSource('selected').setData({ type: 'FeatureCollection',
+    features: coords.map(c => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c } })) });
+}
+
+function selectStation(id, animate) {
+  const f = stations.features.find(f => f.id === id); if (!f) return;
+  const p = f.properties;
+  const ens = entrances.features.filter(e => e.properties.station_id === id);
+  remember('station', id);
+  highlight([f.geometry.coordinates]);
+  moveTo(f.geometry.coordinates, 15.5, animate);
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.name || 'Unnamed station')}</h3>
+    <div>${arr(p.lines).map(chip).join(' ')} <span class="status">${esc(p.status)}</span>
+         ${p.code ? `<span class="sub">${esc(p.code)}</span>` : ''}</div>
+    <dl>
+      <dt>Entrances</dt><dd>${p.entrances}${p.entrances ? `, ${p.wheelchair_entrances} wheelchair-accessible` : ' in the data'}</dd>
+      <dt>Outline</dt><dd>${p.area_m2 ? Number(p.area_m2).toLocaleString() + ' m²' : '—'}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+      <dt>Name from</dt><dd>${esc(p.name_source || '—')}</dd>
+    </dl>
+    ${ens.length ? '<ul>' + ens.map(e => `<li><i class="dot" style="background:${COLORS[e.properties.wheelchair]}"></i>
+        <span>${esc(e.properties.name || 'entrance #' + e.properties.id)}
+        ${e.properties.access_note ? `<span class="sub">· ${esc(e.properties.access_note)}</span>` : ''}</span></li>`).join('') + '</ul>' : ''}`;
+}
+
+function selectEntrance(id, animate) {
+  const f = entrances.features.find(f => f.id === id); if (!f) return;
+  const p = f.properties;
+  const st = stations.features.find(s => s.id === p.station_id);
+  remember('entrance', id);
+  highlight([f.geometry.coordinates]);
+  moveTo(f.geometry.coordinates, 16.5, animate);
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.name || 'Entrance #' + p.id)}</h3>
+    <div><i class="dot" style="background:${COLORS[p.wheelchair]}"></i> wheelchair: ${esc(p.wheelchair)}</div>
+    <dl>
+      <dt>Station</dt><dd>${st ? `<a href="#" data-station="${st.id}">${esc(st.properties.name || 'Unnamed')}</a>` : '—'}
+                          <span class="sub">(source says “${esc(p.station_name)}”, ${esc(p.distance_m)} m)</span></dd>
+      <dt>Access</dt><dd>${esc(p.access_note || '—')}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
+  const a = document.querySelector('#info a[data-station]');
+  if (a) a.onclick = e => { e.preventDefault(); selectStation(+a.dataset.station); };
+}
+</script>
+</body>
+</html>
