@@ -95,3 +95,158 @@ SELECT 'existing station without entrances', s.id, NULL, s.name
 UNION ALL
 SELECT 'entrance without a station', NULL, e.id, e.station_name
   FROM metro_entrances e WHERE e.station_id IS NULL;
+
+-- ---------------------------------------------------------------- areas
+--
+-- Three ways the municipality is divided, each covering all of it.
+-- They do not nest: a neighbourhood or planning unit can straddle
+-- district borders, so each keeps a main district (largest share of its
+-- area) and every district it touches in a link table.
+
+CREATE TABLE IF NOT EXISTS districts (
+    code           text PRIMARY KEY,          -- 01 .. 24, the official district number
+    name           text NOT NULL,             -- official name, e.g. Красно село
+    name_latin     text NOT NULL,             -- official transliteration
+    geom           geometry(MultiPolygon, 4326) NOT NULL,
+    area_km2       numeric NOT NULL,
+    population     integer,                   -- residents of the buildings inside (2019)
+    population_nsi integer,                   -- NSI control areas with this district code
+    boundary_diff_km2 numeric,                -- symmetric difference to the 2017 NAG boundary
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS districts_geom_idx ON districts USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS neighbourhoods (
+    id             integer PRIMARY KEY,       -- object_id in the source
+    name           text,                      -- as in the source, NULL where it is "---"
+    prefix         text,                      -- ЖК., КВ., В.З., С., М. ...
+    kind           text NOT NULL,             -- residential, industrial, park, villa_zone, ...
+    type_code      text,                      -- type_kv in the source
+    district_code  text REFERENCES districts(code),  -- main district
+    district_share numeric,                   -- share of the area in the main district
+    geom           geometry(MultiPolygon, 4326) NOT NULL,
+    area_km2       numeric NOT NULL,
+    population     integer,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS neighbourhoods_geom_idx ON neighbourhoods USING gist (geom);
+
+-- Sofiaplan's analysis unit (градоустройствена единица, УПЕ); most of its
+-- indicators are published per planning unit.
+CREATE TABLE IF NOT EXISTS planning_units (
+    id             integer PRIMARY KEY,       -- object_id in the source
+    name           text NOT NULL,             -- regname
+    district_label text,                      -- rajon as in the source, e.g. "Средец / Оборище"
+    district_code  text REFERENCES districts(code),  -- main district
+    district_share numeric,
+    geom           geometry(MultiPolygon, 4326) NOT NULL,
+    area_km2       numeric NOT NULL,
+    population     integer,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS planning_units_geom_idx ON planning_units USING gist (geom);
+
+-- Every district an area touches (slivers under 1 % of the area are left
+-- out unless people live in them).
+CREATE TABLE IF NOT EXISTS neighbourhood_districts (
+    neighbourhood_id integer NOT NULL REFERENCES neighbourhoods(id) ON DELETE CASCADE,
+    district_code    text NOT NULL REFERENCES districts(code),
+    share            numeric NOT NULL,        -- of the neighbourhood's area
+    population       integer,                 -- its residents in this district
+    PRIMARY KEY (neighbourhood_id, district_code)
+);
+
+CREATE TABLE IF NOT EXISTS planning_unit_districts (
+    planning_unit_id integer NOT NULL REFERENCES planning_units(id) ON DELETE CASCADE,
+    district_code    text NOT NULL REFERENCES districts(code),
+    share            numeric NOT NULL,
+    population       integer,
+    PRIMARY KEY (planning_unit_id, district_code)
+);
+
+-- Inhabited buildings with their residents; the base for any
+-- population-weighted measure (e.g. how many people live near a station).
+CREATE TABLE IF NOT EXISTS building_residents (
+    id             integer PRIMARY KEY,       -- id in the source
+    people         integer NOT NULL,
+    households     integer,
+    age_0_14       integer,
+    age_65_plus    integer,
+    floors         integer,
+    built_year     integer,
+    function       text,                      -- e.g. Жилищна сграда - многофамилна
+    geom           geometry(Point, 4326) NOT NULL,
+    district_code  text REFERENCES districts(code),
+    neighbourhood_id integer REFERENCES neighbourhoods(id),
+    planning_unit_id integer REFERENCES planning_units(id),
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS building_residents_geom_idx ON building_residents USING gist (geom);
+CREATE INDEX IF NOT EXISTS building_residents_district_idx ON building_residents (district_code);
+CREATE INDEX IF NOT EXISTS building_residents_neighbourhood_idx ON building_residents (neighbourhood_id);
+CREATE INDEX IF NOT EXISTS building_residents_planning_unit_idx ON building_residents (planning_unit_id);
+
+-- Discrepancies between and within the area sources. Worth keeping:
+-- they are often findings in themselves.
+CREATE OR REPLACE VIEW area_issues AS
+SELECT 'district boundary changed since 2017' AS issue, 'district' AS area_kind,
+       d.code AS area_id, d.name,
+       format('%s km² differ from the 2017 NAG boundary', d.boundary_diff_km2) AS detail
+  FROM districts d WHERE d.boundary_diff_km2 >= 0.01
+UNION ALL
+SELECT 'population differs from NSI', 'district', d.code, d.name,
+       format('buildings 2019: %s, NSI control areas: %s (%s%%)', d.population, d.population_nsi,
+              round(100.0 * (d.population - d.population_nsi) / nullif(d.population_nsi, 0)))
+  FROM districts d
+ WHERE abs(d.population - coalesce(d.population_nsi, 0)) > 0.1 * greatest(d.population_nsi, 1)
+UNION ALL
+SELECT 'neighbourhood without a name', 'neighbourhood', n.id::text, NULL,
+       format('%s, %s km²', n.kind, n.area_km2)
+  FROM neighbourhoods n WHERE n.name IS NULL
+UNION ALL
+SELECT 'neighbourhood in several districts', 'neighbourhood', n.id::text, n.name,
+       (SELECT string_agg(format('%s %s%%', d.name, round(100 * x.share)), ', ' ORDER BY x.share DESC)
+          FROM neighbourhood_districts x JOIN districts d ON d.code = x.district_code
+         WHERE x.neighbourhood_id = n.id)
+  FROM neighbourhoods n WHERE n.district_share < 0.9
+UNION ALL
+SELECT 'planning unit in several districts', 'planning_unit', p.id::text, p.name,
+       (SELECT string_agg(format('%s %s%%', d.name, round(100 * x.share)), ', ' ORDER BY x.share DESC)
+          FROM planning_unit_districts x JOIN districts d ON d.code = x.district_code
+         WHERE x.planning_unit_id = p.id)
+  FROM planning_units p WHERE p.district_share < 0.9
+UNION ALL
+-- The source labels each unit with its district(s); compare that with the
+-- districts it actually lies in (ignoring parts under 5 %).
+SELECT 'planning unit label disagrees with its location', 'planning_unit', p.id::text, p.name,
+       format('labelled "%s", lies in %s', p.district_label,
+              (SELECT string_agg(format('%s %s%%', d.name, round(100 * x.share)), ', ' ORDER BY x.share DESC)
+                 FROM planning_unit_districts x JOIN districts d ON d.code = x.district_code
+                WHERE x.planning_unit_id = p.id AND x.share >= 0.05))
+  FROM planning_units p
+ WHERE p.district_label IS NULL
+    OR (SELECT array_agg(DISTINCT lower(d.name) ORDER BY lower(d.name))
+          FROM planning_unit_districts x JOIN districts d ON d.code = x.district_code
+         WHERE x.planning_unit_id = p.id AND x.share >= 0.05)
+       IS DISTINCT FROM
+       (SELECT array_agg(DISTINCT CASE lower(btrim(part))
+                                      WHEN 'подуене' THEN 'подуяне'
+                                      WHEN 'студентска' THEN 'студентски'
+                                      ELSE regexp_replace(lower(btrim(part)), '\s+', ' ', 'g') END
+                         ORDER BY CASE lower(btrim(part))
+                                      WHEN 'подуене' THEN 'подуяне'
+                                      WHEN 'студентска' THEN 'студентски'
+                                      ELSE regexp_replace(lower(btrim(part)), '\s+', ' ', 'g') END)
+          FROM unnest(string_to_array(p.district_label, '/')) AS part)
+UNION ALL
+SELECT 'inhabited building outside every district', 'building', b.id::text, NULL,
+       format('%s people', b.people)
+  FROM building_residents b WHERE b.district_code IS NULL;
