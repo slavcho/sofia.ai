@@ -292,6 +292,27 @@ class EducationAccessTest(unittest.TestCase):
                AND a.registered_children = (SELECT sum(children) FROM city.kindergartens)
               FROM city.area_education_access a WHERE a.area_kind = 'city'"""), True)
 
+    def test_both_sofiaplan_sources_are_compared(self):
+        self.assertEqual(self.scalar("""
+            SELECT (SELECT count(*) FROM city.school_access_sofiaplan) || '/'
+                || (SELECT count(*) FROM city.building_residents) || ' '
+                || (SELECT count(*) FROM city.education_unserved_sofiaplan)"""), "34619/34619 228")
+
+    def test_our_unserved_fits_the_residents(self):
+        # Farther thresholds leave fewer unserved, never more than live there.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.education_unserved_sofiaplan
+             WHERE our_kindergarten_unserved_500 > our_kindergarten_unserved_400
+                OR our_school_unserved_500 > our_school_unserved_400
+                OR our_kindergarten_unserved_400 > our_people
+                OR our_school_unserved_400 > our_people"""), 0)
+
+    def test_any_school_is_never_farther_than_a_lower_grade_school(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.school_access_sofiaplan s
+              JOIN city.building_education_access a USING (building_id)
+             WHERE s.any_school_distance_m > a.school_distance_m"""), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

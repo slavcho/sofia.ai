@@ -649,3 +649,71 @@ SELECT s.*,
        coalesce(p.registered_children, 0) AS registered_children,
        round(coalesce(p.registered_children, 0)::numeric / nullif(children, 0), 3) AS registered_per_child
   FROM s LEFT JOIN places p USING (area_kind, area_id);
+
+-- Sofiaplan's own answers about schools and kindergartens, compared
+-- with ours. Filled by education_access.sql.
+--
+-- 2019: the area within 400, 800 and 1200 m on foot of any school (all
+-- 242 they used, of every kind). Each building gets the smallest that
+-- holds it, next to our straight line to any of our 275 schools. Walking
+-- is never shorter, so a building they put within 400 m should be
+-- within 400 m of us too, unless the schools differ.
+CREATE TABLE IF NOT EXISTS school_access_sofiaplan (
+    building_id    integer PRIMARY KEY REFERENCES building_residents(id) ON DELETE CASCADE,
+    sofiaplan_within_m integer CHECK (sofiaplan_within_m IN (400, 800, 1200)),  -- NULL: beyond 1200 m
+    any_school_id  integer REFERENCES schools(id) ON DELETE SET NULL,  -- nearest school of any kind
+    any_school_distance_m numeric,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text                       -- the polygon it is in; NULL when in none
+);
+
+CREATE OR REPLACE VIEW school_access_agreement AS
+WITH b AS (
+    SELECT r.age_0_14 AS children, r.district_code, r.neighbourhood_id,
+           s.sofiaplan_within_m AS t, s.any_school_distance_m AS d
+      FROM school_access_sofiaplan s JOIN building_residents r ON r.id = s.building_id
+), levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, b.* FROM b
+    UNION ALL SELECT 'district', b.district_code, b.* FROM b
+    UNION ALL SELECT 'neighbourhood', b.neighbourhood_id::text, b.* FROM b
+)
+SELECT area_kind, area_id,
+       count(*) AS buildings,
+       sum(children) AS children,
+       round(coalesce(sum(children) FILTER (WHERE t <= 400), 0)::numeric / nullif(sum(children), 0), 3) AS sofiaplan_share_400,
+       round(coalesce(sum(children) FILTER (WHERE d <= 400), 0)::numeric / nullif(sum(children), 0), 3) AS our_share_400,
+       round(coalesce(sum(children) FILTER (WHERE t <= 800), 0)::numeric / nullif(sum(children), 0), 3) AS sofiaplan_share_800,
+       round(coalesce(sum(children) FILTER (WHERE d <= 800), 0)::numeric / nullif(sum(children), 0), 3) AS our_share_800,
+       count(*) FILTER (WHERE t <= 400 AND d > 400) AS sofiaplan_only_400,  -- should not happen
+       count(*) FILTER (WHERE t <= 800 AND d > 800) AS sofiaplan_only_800
+  FROM levels
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;
+
+-- 2021: residents without walking access to a school or a municipal
+-- kindergarten, per Sofiaplan area. The distance they used is not
+-- given. Ours is counted at 400 and 500 m straight; with walking
+-- longer than a straight line, 400 m straight is roughly 500 m on foot.
+-- Their residents (ppl_all) are a later and larger count than the 2019
+-- building data, so compare shares, not people.
+CREATE TABLE IF NOT EXISTS education_unserved_sofiaplan (
+    id             uuid PRIMARY KEY,          -- "id" in the source
+    name           text,                      -- regname
+    district_name  text,                      -- rajon
+    people         numeric,                   -- ppl_all
+    kindergarten_unserved numeric,            -- dg_bez_dos
+    kindergarten_unserved_pct numeric,        -- dg_perc
+    school_unserved numeric,                  -- uch_bez_do
+    school_unserved_pct numeric,              -- uch_perc
+    geom           geometry(MultiPolygon, 4326) NOT NULL,
+    our_people     integer,                   -- residents of the 2019 buildings inside
+    our_kindergarten_unserved_400 integer,    -- of them over 400 m from a municipal kindergarten
+    our_kindergarten_unserved_500 integer,
+    our_school_unserved_400 integer,          -- over 400 m from a school with the lower grades
+    our_school_unserved_500 integer,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS education_unserved_sofiaplan_geom_idx ON education_unserved_sofiaplan USING gist (geom);
