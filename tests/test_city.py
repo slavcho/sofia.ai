@@ -241,5 +241,57 @@ class EducationTest(unittest.TestCase):
         self.assertEqual(self.scalar("SELECT count(*) FROM city.schools WHERE kind IS NULL"), 0)
 
 
+class EducationAccessTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.building_education_access").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.building_education_access is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_every_building_is_measured(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_residents r
+             WHERE NOT EXISTS (SELECT 1 FROM city.building_education_access a
+                                WHERE a.building_id = r.id AND a.kindergarten_distance_m IS NOT NULL
+                                  AND a.school_distance_m IS NOT NULL)"""), 0)
+
+    def test_distance_is_to_the_nearest_in_metres(self):
+        # education_access.sql only measures the 5 nearest on a stretched
+        # copy; check against all of them for one building in 20.
+        self.assertEqual(self.scalar("""
+            SELECT count(*)
+              FROM city.building_education_access a
+              JOIN city.building_residents r ON r.id = a.building_id
+             CROSS JOIN LATERAL (
+                   SELECT min(ST_Distance(k.geom::geography, r.geom::geography)) AS d
+                     FROM city.kindergartens k WHERE k.kind = 'kindergarten' AND k.status = 'open') k
+             CROSS JOIN LATERAL (
+                   SELECT min(ST_Distance(s.geom::geography, r.geom::geography)) AS d
+                     FROM city.schools s WHERE s.kind IN ('primary', 'basic', 'secondary')) s
+             WHERE r.id % 20 = 0
+               AND (abs(a.kindergarten_distance_m - k.d) > 1 OR abs(a.school_distance_m - s.d) > 1)"""), 0)
+
+    def test_municipal_is_never_nearer_than_any(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_education_access
+             WHERE municipal_kindergarten_distance_m < kindergarten_distance_m
+                OR municipal_school_distance_m < school_distance_m"""), 0)
+
+    def test_city_counts_every_child_and_place(self):
+        self.assertEqual(self.scalar("""
+            SELECT a.children = (SELECT sum(age_0_14) FROM city.building_residents)
+               AND a.registered_children = (SELECT sum(children) FROM city.kindergartens)
+              FROM city.area_education_access a WHERE a.area_kind = 'city'"""), True)
+
+
 if __name__ == "__main__":
     unittest.main()

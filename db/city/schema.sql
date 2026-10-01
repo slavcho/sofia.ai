@@ -571,3 +571,81 @@ UNION ALL
 SELECT 'outside its district', NULL, s.id, format('%s: says %s', s.name, s.district_code)
   FROM schools s
  WHERE NOT EXISTS (SELECT 1 FROM districts d WHERE d.code = s.district_code AND ST_Intersects(d.geom, s.geom));
+
+-- ------------------------------------------------------ education access
+--
+-- Straight-line distance from each inhabited building to the nearest
+-- open kindergarten and school, an upper bound on reach as for the
+-- metro and the parks. Filled by education_access.sql. "School" means
+-- one with the lower grades (НУ, ОУ, СОУ); profiled and vocational
+-- schools start at grade 8, special schools serve the whole city.
+
+CREATE TABLE IF NOT EXISTS building_education_access (
+    building_id          integer PRIMARY KEY REFERENCES building_residents(id) ON DELETE CASCADE,
+    kindergarten_id      integer REFERENCES kindergartens(id) ON DELETE SET NULL,  -- any funding, branches too
+    kindergarten_distance_m numeric,
+    municipal_kindergarten_id integer REFERENCES kindergartens(id) ON DELETE SET NULL,
+    municipal_kindergarten_distance_m numeric,
+    school_id            integer REFERENCES schools(id) ON DELETE SET NULL,
+    school_distance_m    numeric,
+    municipal_school_id  integer REFERENCES schools(id) ON DELETE SET NULL,
+    municipal_school_distance_m numeric
+);
+
+-- Children aged 0-14 (and all residents) within reach, for every
+-- district, neighbourhood, planning unit and the city. The building
+-- data has no finer ages, so 0-14 stands for both kindergarten (3-6)
+-- and school age. registered_children is the 2018 registration of the
+-- municipal kindergartens inside the area, a rough sign of how many
+-- places there are for its children; places outside the area count
+-- where they are, not where their children live.
+CREATE OR REPLACE VIEW area_education_access AS
+WITH b AS (
+    SELECT r.people, r.age_0_14 AS children, r.district_code, r.neighbourhood_id, r.planning_unit_id,
+           a.kindergarten_distance_m AS kg, a.municipal_kindergarten_distance_m AS mkg,
+           a.school_distance_m AS sch, a.municipal_school_distance_m AS msch
+      FROM building_residents r
+      JOIN building_education_access a ON a.building_id = r.id
+), levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, b.* FROM b
+    UNION ALL SELECT 'district', b.district_code, b.* FROM b
+    UNION ALL SELECT 'neighbourhood', b.neighbourhood_id::text, b.* FROM b
+    UNION ALL SELECT 'planning_unit', b.planning_unit_id::text, b.* FROM b
+), k AS (
+    SELECT k.children, d.code AS district_code, n.id AS neighbourhood_id, u.id AS planning_unit_id
+      FROM kindergartens k
+      LEFT JOIN districts d ON ST_Intersects(d.geom, k.geom)
+      LEFT JOIN neighbourhoods n ON ST_Intersects(n.geom, k.geom)
+      LEFT JOIN planning_units u ON ST_Intersects(u.geom, k.geom)
+     WHERE k.registration_id IS NOT NULL
+), places AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, sum(children) AS registered_children FROM k
+    UNION ALL SELECT 'district', district_code, sum(children) FROM k GROUP BY 2
+    UNION ALL SELECT 'neighbourhood', neighbourhood_id::text, sum(children) FROM k GROUP BY 2
+    UNION ALL SELECT 'planning_unit', planning_unit_id::text, sum(children) FROM k GROUP BY 2
+), s AS (
+    SELECT area_kind, area_id,
+           sum(people) AS people,
+           sum(children) AS children,
+           coalesce(sum(children) FILTER (WHERE kg <= 300), 0) AS kindergarten_within_300,
+           coalesce(sum(children) FILTER (WHERE kg <= 500), 0) AS kindergarten_within_500,
+           coalesce(sum(children) FILTER (WHERE mkg <= 500), 0) AS municipal_kindergarten_within_500,
+           coalesce(sum(children) FILTER (WHERE sch <= 400), 0) AS school_within_400,
+           coalesce(sum(children) FILTER (WHERE sch <= 800), 0) AS school_within_800,
+           coalesce(sum(children) FILTER (WHERE msch <= 800), 0) AS municipal_school_within_800,
+           coalesce(sum(people) FILTER (WHERE kg <= 500), 0) AS people_kindergarten_within_500,
+           coalesce(sum(people) FILTER (WHERE sch <= 800), 0) AS people_school_within_800
+      FROM levels
+     WHERE area_id IS NOT NULL
+     GROUP BY area_kind, area_id
+)
+SELECT s.*,
+       round(kindergarten_within_300::numeric / nullif(children, 0), 3) AS kindergarten_share_300,
+       round(kindergarten_within_500::numeric / nullif(children, 0), 3) AS kindergarten_share_500,
+       round(municipal_kindergarten_within_500::numeric / nullif(children, 0), 3) AS municipal_kindergarten_share_500,
+       round(school_within_400::numeric / nullif(children, 0), 3) AS school_share_400,
+       round(school_within_800::numeric / nullif(children, 0), 3) AS school_share_800,
+       round(municipal_school_within_800::numeric / nullif(children, 0), 3) AS municipal_school_share_800,
+       coalesce(p.registered_children, 0) AS registered_children,
+       round(coalesce(p.registered_children, 0)::numeric / nullif(children, 0), 3) AS registered_per_child
+  FROM s LEFT JOIN places p USING (area_kind, area_id);
