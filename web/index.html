@@ -172,6 +172,9 @@ const METRICS = {
   registered_per_child: { label: 'Registered in municipal kindergartens per child (0–14)', breaks: [0.1, 0.2, 0.3, 0.4], colors: ORANGE },
   school_share_800:   { label: 'Children within 800 m of a school (1–7)', breaks: PCT, colors: PURPLE, pct: true },
   sofiaplan_school_share_800: { label: 'Schools: Sofiaplan, 800 m on foot (2019)', breaks: PCT, colors: PURPLE, pct: true },
+  assigned_school_share_800: { label: 'Children whose assigned school is within 800 m', breaks: PCT, colors: PURPLE, pct: true },
+  assigned_farther_share: { label: 'Children assigned to a school 400 m+ farther than the nearest', breaks: [0.02, 0.05, 0.1, 0.2],
+                        colors: ['#f2f0f7', '#cbc9e2', '#9e9ac8', '#756bb1', '#54278f'], pct: true },
   density:            { label: 'Residents per km²', breaks: [1000, 3000, 6000, 10000],
                         colors: ['#feedde', '#fdbe85', '#fd8d3c', '#e6550d', '#a63603'] },
 };
@@ -189,12 +192,13 @@ const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
 const num = v => v == null ? '—' : Number(v).toLocaleString();
 
 map.on('load', async () => {
-  const [lineList, st, outlines, en, tracks, issues, areaIssues, pk, pe, parkIssues, kg, sc, eduIssues] = await Promise.all([
+  const [lineList, st, outlines, en, tracks, issues, areaIssues, pk, pe, parkIssues, kg, sc, eduIssues, catchmentIssues] = await Promise.all([
     getJSON('/api/metro/lines'), getJSON('/api/metro/stations'),
     getJSON('/api/metro/stations?shape=outline'), getJSON('/api/metro/entrances'),
     getJSON('/api/metro/tracks'), getJSON('/api/metro/issues'), getJSON('/api/areas/issues'),
     getJSON('/api/parks'), getJSON('/api/parks/entrances'), getJSON('/api/parks/issues'),
-    getJSON('/api/kindergartens'), getJSON('/api/schools'), getJSON('/api/education/issues')]);
+    getJSON('/api/kindergartens'), getJSON('/api/schools'), getJSON('/api/education/issues'),
+    getJSON('/api/schools/catchment-issues')]);
   lineList.forEach(l => lines[l.code] = l);
   stations = st; entrances = en; parks = pk; gates = pe; kgs = kg; schools = sc;
 
@@ -203,6 +207,7 @@ map.on('load', async () => {
   map.addSource('stations', { type: 'geojson', data: st });
   map.addSource('entrances', { type: 'geojson', data: en });
   map.addSource('selected', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addSource('catchment', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('areas', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('parks', { type: 'geojson', data: pk, promoteId: 'id' });
   map.addSource('park-entrances', { type: 'geojson', data: pe });
@@ -242,6 +247,10 @@ map.on('load', async () => {
     paint: { 'line-color': ['get', 'color'], 'line-width': 1.5,
              // line-dasharray cannot depend on the data, so planned stations are fainter instead.
              'line-opacity': ['case', ['==', ['get', 'status'], 'planned'], 0.5, 1] } });
+  // The address points assigned to the selected school.
+  map.addLayer({ id: 'catchment', type: 'circle', source: 'catchment',
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 1.5, 17, 4],
+             'circle-color': '#6a51a3', 'circle-opacity': 0.6 } });
   map.addLayer({ id: 'selected', type: 'circle', source: 'selected',
     paint: { 'circle-radius': 14, 'circle-color': 'rgba(0,0,0,0)',
              'circle-stroke-color': '#ffcc00', 'circle-stroke-width': 3 } });
@@ -285,7 +294,7 @@ map.on('load', async () => {
   renderLines();
   renderParkLegend();
   renderEducationLegend();
-  renderIssues(issues, areaIssues, parkIssues, eduIssues);
+  renderIssues(issues, areaIssues, parkIssues, eduIssues.concat(catchmentIssues));
   bindToggles();
   bindAreaControls();
 
@@ -463,6 +472,12 @@ function select(kind, id) {
   if (!KIND_LABEL[kind]) map.setFilter('areas-selected', NOTHING);
   else highlight([]);
   if (kind !== 'park') map.setFilter('parks-selected', NOTHING);
+  showCatchment([]);
+}
+
+function showCatchment(coords) {
+  map.getSource('catchment').setData({ type: 'FeatureCollection',
+    features: coords.map(c => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c } })) });
 }
 const isSelected = (kind, id) => selection && selection.kind === kind && selection.id === id;
 
@@ -582,6 +597,11 @@ async function selectArea(kind, id, animate) {
       ${pct(a.school_agreement.sofiaplan_share_400)} of children within 400 m and
       ${pct(a.school_agreement.sofiaplan_share_800)} within 800 m; we find
       ${pct(a.school_agreement.our_share_400)} and ${pct(a.school_agreement.our_share_800)} in a straight line.</div>` : ''}
+    ${a.school_catchment && a.school_catchment.children_known ? `<div class="sub" style="margin-top:6px">Assigned school
+      (city list 2026, for the ${pct(a.school_catchment.known_share)} of children whose building is placed on it):
+      ${pct(a.school_catchment.assigned_share_800)} within 800 m, median ${num(a.school_catchment.median_assigned_m)} m;
+      ${pct(a.school_catchment.assigned_nearest_share)} assigned to their nearest ОУ or СОУ and
+      ${pct(a.school_catchment.assigned_farther_share)} to one at least 400 m farther.</div>` : ''}
     ${a.districts ? `<h4>District${a.districts.length > 1 ? 's' : ''}</h4><ul>` + a.districts.map(d => `<li>
         <a href="#" data-area="district:${esc(d.code)}">${esc(d.name)}</a>
         <span class="sub">${pct(d.share)} of the area · ${num(d.population)} residents${d.main ? ' · main' : ''}</span></li>`).join('') + '</ul>' : ''}
@@ -691,12 +711,24 @@ function selectSchool(id, animate) {
       ${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}
       <dt>Classes</dt><dd>${p.class_count ? num(p.class_count) + ' classes' : '— <span class="sub">(0 or missing in the source)</span>'}</dd>
       <dt>Address</dt><dd>${esc(p.address || '—')}</dd>
+      <dt>Catchment</dt><dd id="school-catchment" class="sub">loading…</dd>
       <dt>Admin code</dt><dd>${esc(p.admin_code ?? '—')}</dd>
       <dt>Funding</dt><dd>${esc(p.funding)} <span class="sub">(code ${esc(p.funding_code ?? '—')})</span></dd>
       ${p.details_url ? `<dt>Details</dt><dd><a href="${esc(p.details_url)}" target="_blank" rel="noopener">${esc(p.details_url)}</a></dd>` : ''}
       <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
       <dt>Source</dt><dd>${esc(p.source)}</dd>
     </dl>`;
+  getJSON(`/api/schools/${id}/catchment`).then(c => {
+    if (!isSelected('school', id)) return;
+    showCatchment(c.points);
+    document.getElementById('school-catchment').outerHTML = `<dd>${num(c.addresses)} addresses, ${num(c.located)} placed on the map;
+      ${c.buildings ? `${num(c.children)} children aged 0–14 in ${num(c.buildings)} buildings, median ${num(c.median_distance_m)} m away.
+      Nearest ОУ or СОУ for ${num(c.buildings_nearest)} of those buildings.`
+        : 'no 2019 resident data for these places (it covers the city proper only).'}<br>
+      <span class="sub">City list as of ${esc(c.data_as_of)} (${esc(c.source)})${c.match === 'number' ? ', matched by number only' : ''};
+      children 2019, straight line.</span></dd>`;
+  }).catch(err => { const el = document.getElementById('school-catchment');
+    if (el) el.textContent = /: 404$/.test(err.message) ? 'not in the city list (2026)' : 'not available'; });
 }
 </script>
 </body>

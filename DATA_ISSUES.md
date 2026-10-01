@@ -552,5 +552,9 @@ When you add an entry, give it the next number and keep the fields.
 - **Status:** open.
 - **Source:** list 2026-06-30, schools 2018, residents 2019.
 - **What:** new streets and blocks built after 2019 have no residents.
-  Schools opened since 2018 (e.g. 204 ОУ) have no location.
+  Schools opened since 2018 (e.g. 204 ОУ) have no location. The 2019
+  residents per building cover the city proper only, so 24 list schools
+  that serve only the towns and villages (Банкя, Нови Искър, Владая,
+  Лозен, …) have no children counted, and those places are missing from
+  the area shares.
 - **Handling:** shown with each figure's date.

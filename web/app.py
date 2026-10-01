@@ -268,6 +268,45 @@ def education_issues():
     """)
 
 
+@app.get("/api/schools/catchment-issues")
+def school_catchment_issues():
+    # Placed at the school; the list school with no 2018 school has no place.
+    return json_query("""
+        SELECT coalesce(json_agg(json_build_object(
+                   'issue', i.issue, 'detail', i.detail, 'school_id', c.school_id,
+                   'lon', round(ST_X(s.geom)::numeric, 6),
+                   'lat', round(ST_Y(s.geom)::numeric, 6))
+                   ORDER BY i.issue, i.list_id, i.district_code, i.street), '[]')::text
+          FROM catchment_issues i
+          JOIN catchment_schools c ON c.list_id = i.list_id
+          LEFT JOIN schools s ON s.id = c.school_id
+    """)
+
+
+@app.get("/api/schools/{school_id}/catchment")
+def school_catchment(school_id: int):
+    # The list's addresses of the school (one point per address point) and
+    # the 2019 children in the buildings that take them.
+    return json_query("""
+        SELECT (SELECT json_build_object(
+                    'list_name', c.name, 'match', c.match,
+                    'addresses', c.addresses, 'located', c.located,
+                    'buildings', k.buildings, 'children', k.children,
+                    'median_distance_m', k.median_distance_m,
+                    'buildings_nearest', k.buildings_nearest,
+                    'data_as_of', c.data_as_of, 'source', c.source_dataset,
+                    'points', (SELECT coalesce(json_agg(json_build_array(
+                                         round(ST_X(p.geom)::numeric, 6), round(ST_Y(p.geom)::numeric, 6))), '[]')
+                                 FROM (SELECT DISTINCT ON (a.address_fid) a.geom FROM catchment_addresses a
+                                        WHERE a.list_school_id = c.list_id AND a.geom IS NOT NULL
+                                        ORDER BY a.address_fid) p))
+                  FROM catchment_schools c
+                  JOIN catchment_school_children k ON k.list_id = c.list_id
+                 WHERE c.school_id = %(id)s
+                 ORDER BY c.list_id LIMIT 1)::text
+    """, {"id": school_id})
+
+
 # Area kinds: table, key column, the table linking the area to the
 # districts it lies in (none for a district), and kind-specific fields.
 AREAS = {
@@ -328,7 +367,9 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'municipal_kindergarten_share_500', e.municipal_kindergarten_share_500,
                        'school_share_800', e.school_share_800,
                        'registered_per_child', e.registered_per_child,
-                       'sofiaplan_school_share_800', s.sofiaplan_share_800)) AS feature
+                       'sofiaplan_school_share_800', s.sofiaplan_share_800,
+                       'assigned_school_share_800', c.assigned_share_800,
+                       'assigned_farther_share', c.assigned_farther_share)) AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
@@ -340,6 +381,8 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                  ON e.area_kind = %(kind)s AND e.area_id = a.{a['key']}::text
           LEFT JOIN school_access_agreement s
                  ON s.area_kind = %(kind)s AND s.area_id = a.{a['key']}::text
+          LEFT JOIN area_school_catchment c
+                 ON c.area_kind = %(kind)s AND c.area_id = a.{a['key']}::text
          ORDER BY a.{a['key']}
     """), {"kind": kind})
 
@@ -375,6 +418,8 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                           WHERE e.area_kind = %(kind)s AND e.area_id = a.{a['key']}::text),
                     'school_agreement', (SELECT row_to_json(s) FROM school_access_agreement s
                                           WHERE s.area_kind = %(kind)s AND s.area_id = a.{a['key']}::text),
+                    'school_catchment', (SELECT row_to_json(c) FROM area_school_catchment c
+                                          WHERE c.area_kind = %(kind)s AND c.area_id = a.{a['key']}::text),
                     'districts', {districts},
                     'issues', (SELECT json_agg(json_build_object('issue', i.issue, 'detail', i.detail))
                                  FROM area_issues i
