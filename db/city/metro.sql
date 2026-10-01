@@ -83,10 +83,11 @@ DECLARE bad text;
 BEGIN
     SELECT string_agg(format('%s/%s', f.station_id, f.field), ', ') INTO bad
       FROM fixes f
-     WHERE f.field <> 'name'
+     WHERE f.field NOT IN ('name', 'status')
+        OR (f.field = 'status' AND f.value NOT IN ('existing', 'planned'))
         OR NOT EXISTS (SELECT 1 FROM metro_stations s WHERE s.id = f.station_id);
     IF bad IS NOT NULL THEN
-        RAISE EXCEPTION 'metro_fixes.csv: unknown station or field: %', bad;
+        RAISE EXCEPTION 'metro_fixes.csv: unknown station, field or status: %', bad;
     END IF;
 END $$;
 
@@ -94,6 +95,12 @@ UPDATE metro_stations s
    SET name = f.value, name_source = 'metro_fixes.csv: ' || f.source
   FROM fixes f
  WHERE f.station_id = s.id AND f.field = 'name';
+
+-- Before the lines are assigned: a station that is not built yet is on no line.
+UPDATE metro_stations s
+   SET status = f.value
+  FROM fixes f
+ WHERE f.station_id = s.id AND f.field = 'status';
 
 -- Which lines serve which station, by code (Line 1 is МС1–МС23, Line 2
 -- МС200–МС212). Line 3 stations have no code in the source.

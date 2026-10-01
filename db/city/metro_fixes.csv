@@ -1,2 +1,7 @@
 station_id,field,value,source
 29,name,Витоша,"The 2019 point named Витоша is 576 m north of this outline (МС212, next to Paradise Center), so it is not matched by distance; the 2021 outline is the station's real location."
+65,name,Стадион Георги Аспарухов,"Unnamed in the source; the station exists on Line 3 east of Хаджи Димитър (checked by the project owner, 2026-10-01)."
+66,name,Бесарабия,"Unnamed in the source; the station exists on Line 3 east of Хаджи Димитър (checked by the project owner, 2026-10-01)."
+67,name,Генерал Владимир Вазов,"Unnamed in the source; the station exists on Line 3 east of Хаджи Димитър (checked by the project owner, 2026-10-01)."
+68,status,planned,"Marked existing in the 2021 outlines, but there is no station at this place yet (checked by the project owner, 2026-10-01)."
+62,status,planned,"Marked existing in the 2021 outlines, between Театрална and Орлов мост, but there is no station at this place yet (checked by the project owner, 2026-10-01)."

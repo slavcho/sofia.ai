@@ -20,7 +20,7 @@ When you add an entry, give it the next number and keep the fields.
 
 | #  | Issue | Area | Status |
 |----|-------|------|--------|
-| 1  | Five unnamed "existing" stations that may not exist | metro | open |
+| 1  | Five unnamed "existing" stations, two not built | metro | worked around |
 | 2  | Station codes lost their Cyrillic prefix | metro | worked around |
 | 3  | 2019 station point for Витоша is 576 m off | metro | worked around |
 | 4  | Many stations have no name | metro | flagged |
@@ -38,25 +38,31 @@ When you add an entry, give it the next number and keep the fields.
 
 ## Metro
 
-### 1. Five unnamed "existing" stations that may not exist
+### 1. Five unnamed "existing" stations, two not built
 
-- **Status:** open, needs confirmation against the real network.
+- **Status:** worked around.
 - **Source:** `subway-stations`, file `mgt_metro_spirki_26_sofpr_20210308`
   (station outlines, 2021).
 - **What:** five outlines have `layer = existing` but no code and no name,
   and no 2019 station point lies within 50 m of them. Line 3 is the only
-  line without codes, so `metro.sql` puts them on M3.
-  - Four lie east of Хаджи Димитър, the current end of Line 3, in Подуяне
-    (ids 65–68, 0.7–2.8 km from it). The track segments there are also
-    marked `existing`.
-  - One (id 62) lies between Театрална and Орлов мост, 658 m from
-    Театрална, where Line 3 has no station.
-- **Impact:** they count as existing stations in walking access. Together
-  they are the nearest station for about 94,000 residents, so access in
-  Подуяне (and a little in Средец) is probably overstated. If they are an
-  extension under construction, they belong with the planned stations.
-- **Handling:** none yet. Once confirmed, correct their status (and names)
-  in `db/city/metro_fixes.csv`, which will need a `status` field.
+  line without codes, so `metro.sql` put them all on M3. Checked by the
+  project owner on 2026-10-01:
+
+  | id | lat, lon | reality |
+  |----|----------|---------|
+  | 65 | 42.70541, 23.35962 | exists: Стадион Георги Аспарухов |
+  | 66 | 42.70863, 23.36916 | exists: Бесарабия |
+  | 67 | 42.71064, 23.38314 | exists: Генерал Владимир Вазов |
+  | 68 | 42.70479, 23.39088 | not built; probably planned |
+  | 62 | 42.69195, 23.34298 | not built, between Театрална and Орлов мост; probably planned |
+
+- **Impact:** before the fix, ids 62 and 68 counted as existing stations in
+  walking access. In Средец, the share of residents within 500 m of a
+  station drops from 88% to 80% with the fix.
+- **Handling:** `db/city/metro_fixes.csv` names 65–67 and sets 62 and 68 to
+  `planned`. Still open: the Line 3 track (two lines of about 15.8 km, one
+  per direction) runs on to 68 and is marked `existing` all the way, so
+  the unbuilt part cannot be told apart without splitting it.
 - **Check:** `metro_issues`, "station without a name".
 
 ### 2. Station codes lost their Cyrillic prefix
@@ -80,8 +86,8 @@ When you add an entry, give it the next number and keep the fields.
 - **Status:** flagged.
 - **Source:** `subway-stations`. The 2021 outlines have no names; names
   come only from the 2019 points within 50 m.
-- **What:** 30 stations have no name: most planned stations, and the five
-  in issue 1.
+- **What:** 27 stations have no name, all of them planned (two of them from
+  issue 1).
 - **Check:** `metro_issues`, "station without a name".
 
 ### 5. Lines and their stations are not in the data
@@ -106,7 +112,7 @@ When you add an entry, give it the next number and keep the fields.
 
 - **Status:** flagged.
 - **Source:** `metro-stations-entrances` (OSM, 2020-04-02).
-- **What:** 18 existing stations have no entrances: all of Line 3, which
+- **What:** 16 existing stations have no entrances: all of Line 3, which
   opened after the snapshot, and Обеля.
 - **Impact:** wheelchair access is unknown there, not absent.
 - **Check:** `metro_issues`, "existing station without entrances".
