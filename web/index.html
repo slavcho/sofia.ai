@@ -106,6 +106,9 @@
   table.access td { text-align: right; padding: 1px 4px; }
   table.access th:first-child, table.access td:first-child { text-align: left; padding-left: 0; }
   #info h4 { margin: 12px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .hours { display: grid; grid-template-columns: 62px repeat(24, 1fr); gap: 1px; align-items: end;
+           font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .hours i { display: block; background: #3182bd; min-height: 1px; }
   @media (max-width: 720px) {
     #main { flex-direction: column-reverse; }
     #side { width: 100%; height: 45%; border-right: 0; border-top: 1px solid var(--border); }
@@ -127,7 +130,7 @@
   <h1 id="focus-heading">Overview</h1>
   <div id="focus-question"></div>
   <div class="sub">Click a station, a park, a school, an entrance or an area on the map for its details.</div>
-  <div class="sub">Stations 2021 · entrances 2020 (OSM) · parks 2020 · kindergartens and schools 2018 · residents 2019 · urbandata.sofia.bg</div>
+  <div class="sub">Stations 2021 · entrances 2020 (OSM) · parks 2020 · kindergartens and schools 2018 · residents 2019 · timetable 2026 · urbandata.sofia.bg</div>
 
   <section id="issues-panel" hidden>
   <h2>Data issues</h2>
@@ -147,6 +150,8 @@
   <label class="toggle"><input type="checkbox" data-key="planned-parks" id="show-planned-parks"> Planned parks</label>
   <label class="toggle"><input type="checkbox" data-key="kindergartens" data-layers="kindergartens" checked> Kindergartens</label>
   <label class="toggle"><input type="checkbox" data-key="schools" data-layers="schools" checked> Schools</label>
+  <label class="toggle"><input type="checkbox" data-key="transit-stops" data-layers="transit-stops"> Public transport stops</label>
+  <label class="toggle"><input type="checkbox" data-key="transit-routes" data-layers="transit-routes"> Public transport lines</label>
   </details>
 
   <!-- Each legend shows only while one of its layers is drawn on screen. -->
@@ -183,6 +188,16 @@
   <div data-legend="schools" hidden>
   <h2>Schools</h2>
   <div id="school-legend" class="legend"></div>
+  </div>
+
+  <div data-legend="transit-stops" hidden>
+  <h2>Stops: departures per hour, weekday 7–9</h2>
+  <div id="transit-stop-legend" class="legend"></div>
+  </div>
+
+  <div data-legend="transit-routes" hidden>
+  <h2>Public transport lines</h2>
+  <div id="transit-route-legend" class="legend"></div>
   </div>
 
 
@@ -224,6 +239,14 @@ const SCHOOL_COLORS = { municipal: '#6a51a3', state: '#3f007d', private: '#bcbdd
 const KG_KIND = { kindergarten: 'kindergarten', nursery: 'nursery (ДЯ)', other: 'other (centre)' };
 const SCHOOL_KIND = { primary: 'primary (НУ, 1–4)', basic: 'basic (ОУ, 1–7)', secondary: 'secondary (СОУ, 1–12)',
                       profiled: 'profiled (ПГ)', vocational: 'vocational', special: 'special' };
+// Public transport areas in reds; the stops in blues, to stand out on
+// them. A stop's shade is how often something leaves it.
+const TRANSIT = ['#fcbba1', '#fc9272', '#fb6a4a', '#de2d26', '#a50f15'];
+const STOP_COLORS = ['#c6dbef', '#6baed6', '#3182bd', '#08519c', '#08306b'];
+const STOP_BREAKS = [4, 12, 30, 60];
+// The colours the timetable gives the lines (routes.txt).
+const MODE_COLORS = { bus: '#BE1E2D', trolleybus: '#27AAE1', tram: '#F7941D', metro: '#1C75BC', night: '#000000' };
+const MODE_LABEL = { bus: 'bus', trolleybus: 'trolleybus', tram: 'tram', metro: 'metro' };
 const NOTHING = ['boolean', false];   // a filter that hides every feature
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // MapLibre hands array properties back as JSON strings.
@@ -272,6 +295,15 @@ const METRICS = {
   assigned_school_share_800: { label: 'Children whose assigned school is within 800 m', breaks: PCT, colors: PURPLE, pct: true },
   assigned_farther_share: { label: 'Children assigned to a school 400 m+ farther than the nearest', breaks: [0.02, 0.05, 0.1, 0.2],
                         colors: ['#f2f0f7', '#cbc9e2', '#9e9ac8', '#756bb1', '#54278f'], pct: true },
+  transit_share_400:  { label: 'Public transport: residents within 400 m of a stop', breaks: PCT, colors: TRANSIT, pct: true },
+  frequent_share:     { label: 'Public transport: 12+ departures an hour within 400 m, weekday 7–9', breaks: PCT, colors: TRANSIT, pct: true },
+  median_peak_per_hour: { label: 'Public transport: departures an hour within 400 m, weekday 7–9 (median building)',
+                        breaks: [12, 30, 60, 100], colors: TRANSIT },
+  evening_share:      { label: 'Public transport: 12+ departures an hour, weekday 20–23', breaks: PCT, colors: TRANSIT, pct: true },
+  saturday_share:     { label: 'Public transport: 12+ departures an hour, Saturday 10–18', breaks: PCT, colors: TRANSIT, pct: true },
+  sunday_share:       { label: 'Public transport: 12+ departures an hour, Sunday 10–18', breaks: PCT, colors: TRANSIT, pct: true },
+  night_share:        { label: 'Public transport: a departure every hour, 1–4 at night', breaks: PCT, colors: TRANSIT, pct: true },
+  sofiaplan_transit_share_400: { label: 'Public transport: Sofiaplan, 400 m on foot (2021)', breaks: PCT, colors: TRANSIT, pct: true },
   density:            { label: 'Residents per km²', breaks: [1000, 3000, 6000, 10000],
                         colors: ['#feedde', '#fdbe85', '#fd8d3c', '#e6550d', '#a63603'] },
 };
@@ -284,19 +316,21 @@ const AREA_FILE = { district: 'regions_sofia.geojson (GIS Sofia)',
                     planning_unit: 'ge_26_sofpr_20200616 (Sofiaplan)' };
 
 let lines = {}, stations = null, entrances = null, parks = null, gates = null, kgs = null, schools = null;
+// The public transport loads the first time it is shown (loadTransit).
+let transitStops = null, transitRoutes = null, transitLoading = null;
 // The area level and the metric they are coloured by; set by the focus.
 let areaKind = '', areaMetric = 'share_500', areaCache = {}, selection = null, allIssues = [];
 const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
 const num = v => v == null ? '—' : Number(v).toLocaleString();
 
 map.on('load', async () => {
-  const [lineList, st, outlines, en, tracks, issues, areaIssues, pk, pe, parkIssues, kg, sc, eduIssues, catchmentIssues] = await Promise.all([
+  const [lineList, st, outlines, en, tracks, issues, areaIssues, pk, pe, parkIssues, kg, sc, eduIssues, catchmentIssues, transitIssues] = await Promise.all([
     getJSON('/api/metro/lines'), getJSON('/api/metro/stations'),
     getJSON('/api/metro/stations?shape=outline'), getJSON('/api/metro/entrances'),
     getJSON('/api/metro/tracks'), getJSON('/api/metro/issues'), getJSON('/api/areas/issues'),
     getJSON('/api/parks'), getJSON('/api/parks/entrances'), getJSON('/api/parks/issues'),
     getJSON('/api/kindergartens'), getJSON('/api/schools'), getJSON('/api/education/issues'),
-    getJSON('/api/schools/catchment-issues')]);
+    getJSON('/api/schools/catchment-issues'), getJSON('/api/transit/issues')]);
   lineList.forEach(l => lines[l.code] = l);
   stations = st; entrances = en; parks = pk; gates = pe; kgs = kg; schools = sc;
 
@@ -311,6 +345,8 @@ map.on('load', async () => {
   map.addSource('park-entrances', { type: 'geojson', data: pe });
   map.addSource('kindergartens', { type: 'geojson', data: kg });
   map.addSource('schools', { type: 'geojson', data: sc });
+  map.addSource('transit-stops', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addSource('transit-routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
   // Areas go under everything else, so stations stay clickable on top.
   map.addLayer({ id: 'areas-fill', type: 'fill', source: 'areas',
@@ -332,6 +368,13 @@ map.on('load', async () => {
   map.addLayer({ id: 'parks-selected', type: 'line', source: 'parks', filter: NOTHING,
     paint: { 'line-color': '#ffcc00', 'line-width': 3 } });
 
+  map.addLayer({ id: 'transit-routes', type: 'line', source: 'transit-routes',
+    layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.6,
+             'line-width': ['interpolate', ['linear'], ['zoom'], 11, 1, 16, 3] } });
+  map.addLayer({ id: 'transit-routes-selected', type: 'line', source: 'transit-routes', filter: NOTHING,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 3, 16, 7] } });
   map.addLayer({ id: 'tracks-existing', type: 'line', source: 'tracks',
     filter: ['==', ['get', 'status'], 'existing'],
     paint: { 'line-color': '#3b3f46', 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 5] } });
@@ -355,6 +398,13 @@ map.on('load', async () => {
   map.addLayer({ id: 'park-entrances', type: 'circle', source: 'park-entrances', minzoom: 14,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 2.5, 17, 5],
              'circle-color': ['match', ['get', 'kind'], ...Object.entries(GATE_COLORS).flat(), GATE_COLORS.unknown],
+             'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  map.addLayer({ id: 'transit-stops', type: 'circle', source: 'transit-stops', minzoom: 13,
+    layout: { visibility: 'none' },
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, ['case', ['get', 'served'], 2.5, 1.5],
+                                                                   17, ['case', ['get', 'served'], 6, 3]],
+             'circle-color': ['case', ['!', ['get', 'served']], NO_DATA,
+                              ['step', ['get', 'peak_per_hour'], ...STOP_COLORS.flatMap((c, i) => i ? [STOP_BREAKS[i - 1], c] : [c])]],
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
   // Closed and doubtful kindergartens (and schools with no classes) are faded.
   map.addLayer({ id: 'kindergartens', type: 'circle', source: 'kindergartens', minzoom: 12,
@@ -392,9 +442,11 @@ map.on('load', async () => {
   renderLines();
   renderParkLegend();
   renderEducationLegend();
+  renderTransitLegend();
   const tag = (list, source) => list.map(i => ({ ...i, source }));
   renderIssues([...tag(issues, 'Metro'), ...tag(areaIssues, 'Areas'), ...tag(parkIssues, 'Parks'),
-                ...tag(eduIssues, 'Kindergartens and schools'), ...tag(catchmentIssues, 'School catchments')]);
+                ...tag(eduIssues, 'Kindergartens and schools'), ...tag(catchmentIssues, 'School catchments'),
+                ...tag(transitIssues, 'Public transport')]);
   bindToggles();
   paintAreas();
   bindList();
@@ -418,7 +470,8 @@ map.on('load', async () => {
   });
   map.on('mouseenter', 'entrances', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'entrances', () => map.getCanvas().style.cursor = '');
-  // Metro first, then park entrances, schools and kindergartens, parks, and areas last.
+  // Metro first, then park entrances, schools and kindergartens, public
+  // transport stops and lines, parks, and areas last.
   const METRO = ['stations', 'entrances', 'outlines-fill'];
   const EDU = ['schools', 'kindergartens'];
   map.on('click', 'park-entrances', e => {
@@ -433,21 +486,31 @@ map.on('load', async () => {
     if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', 'schools'] }).length) return;
     selectKindergarten(e.features[0].properties.id);
   });
-  map.on('click', 'parks-fill', e => {
+  const TRANSIT_LAYERS = ['transit-stops', 'transit-routes'];
+  map.on('click', 'transit-stops', e => {
     if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU] }).length) return;
+    selectTransitStop(e.features[0].properties.id);
+  });
+  map.on('click', 'transit-routes', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'transit-stops'] }).length) return;
+    selectTransitRoute(e.features[0].properties.id);
+  });
+  map.on('click', 'parks-fill', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS] }).length) return;
     selectPark(e.features[0].properties.id);
   });
-  for (const id of ['park-entrances', ...EDU, 'parks-fill']) {
+  for (const id of ['park-entrances', ...EDU, ...TRANSIT_LAYERS, 'parks-fill']) {
     map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   }
   map.on('click', 'areas-fill', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'parks-fill'] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'parks-fill'] }).length) return;
     selectArea(areaKind, e.features[0].properties.id);
   });
 
   // ?station=<id>, ?entrance=<id>, ?park=<id>, ?park_entrance=<id>,
-  // ?kindergarten=<id>, ?school=<id> or ?area=<kind>:<id> opens the page
+  // ?kindergarten=<id>, ?school=<id>, ?transit_stop=<id>,
+  // ?transit_route=<id> or ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   applyFocus(q.get('focus') || 'overview');
@@ -457,6 +520,8 @@ map.on('load', async () => {
   else if (q.has('park_entrance')) selectParkEntrance(+q.get('park_entrance'), false);
   else if (q.has('kindergarten')) selectKindergarten(+q.get('kindergarten'), false);
   else if (q.has('school')) selectSchool(+q.get('school'), false);
+  else if (q.has('transit_stop')) selectTransitStop(q.get('transit_stop'), false);
+  else if (q.has('transit_route')) selectTransitRoute(q.get('transit_route'), false);
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
@@ -550,6 +615,30 @@ function renderEducationLegend() {
   document.getElementById('school-legend').innerHTML = legend(SCHOOL_COLORS, 'no classes in the data', 0.5);
 }
 
+function renderTransitLegend() {
+  const labels = STOP_BREAKS.map((b, i) => i ? `${STOP_BREAKS[i - 1]}–${b}` : `< ${b}`).concat(`≥ ${STOP_BREAKS.at(-1)}`);
+  document.getElementById('transit-stop-legend').innerHTML =
+    STOP_COLORS.map((c, i) => `<span><i class="dot" style="background:${c}"></i>${labels[i]}</span>`).join('') +
+    `<span><i class="dot" style="background:${NO_DATA}"></i>never served</span>`;
+  document.getElementById('transit-route-legend').innerHTML =
+    ['bus', 'trolleybus', 'tram'].map(k =>
+      `<span><i class="swatch" style="background:${MODE_COLORS[k]}"></i>${k}</span>`).join('') +
+    `<span><i class="swatch" style="background:${MODE_COLORS.night}"></i>night bus</span>
+     <span><i class="swatch" style="background:${MODE_COLORS.metro}"></i>metro (line colour)</span>`;
+}
+
+// Stops and lines, fetched once, the first time either is shown.
+function loadTransit() {
+  return transitLoading ||= Promise.all([getJSON('/api/transit/stops'), getJSON('/api/transit/routes')])
+    .then(([s, r]) => {
+      transitStops = s; transitRoutes = r;
+      map.getSource('transit-stops').setData(s);
+      map.getSource('transit-routes').setData(r);
+      if (listName.startsWith('transit')) renderList();
+    })
+    .catch(err => { transitLoading = null; throw err; });
+}
+
 function renderIssues(all) {
   allIssues = all;
   const filter = document.getElementById('issue-source');
@@ -582,6 +671,7 @@ function openIssue(i) {
   else if (i.park_id) selectPark(i.park_id); else if (i.park_entrance_id) selectParkEntrance(i.park_entrance_id);
   else if (i.kindergarten_id) selectKindergarten(i.kindergarten_id); else if (i.school_id) selectSchool(i.school_id);
   else if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
+  else if (i.stop_id) selectTransitStop(i.stop_id); else if (i.route_id) selectTransitRoute(i.route_id);
 }
 
 function updateLegends() {
@@ -593,9 +683,11 @@ function updateLegends() {
 }
 
 function bindToggles() {
-  document.querySelectorAll('input[data-layers]').forEach(cb => cb.onchange = () =>
+  document.querySelectorAll('input[data-layers]').forEach(cb => cb.onchange = () => {
     cb.dataset.layers.split(',').forEach(id =>
-      map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none')));
+      map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none'));
+    if (cb.checked && cb.dataset.key.startsWith('transit')) loadTransit().catch(() => {});
+  });
   document.getElementById('show-planned').onchange = e => {
     const f = e.target.checked ? null : ['==', ['get', 'status'], 'existing'];
     ['stations', 'station-labels', 'outlines-fill', 'outlines-line'].forEach(id => map.setFilter(id, f));
@@ -651,6 +743,7 @@ function select(kind, id) {
   if (!KIND_LABEL[kind]) map.setFilter('areas-selected', NOTHING);
   else highlight([]);
   if (kind !== 'park') map.setFilter('parks-selected', NOTHING);
+  if (kind !== 'transit_route') map.setFilter('transit-routes-selected', NOTHING);
   showCatchment([]);
 }
 
@@ -663,6 +756,7 @@ function clearSelection() {
   showCatchment([]);
   map.setFilter('areas-selected', NOTHING);
   map.setFilter('parks-selected', NOTHING);
+  map.setFilter('transit-routes-selected', NOTHING);
   document.getElementById('selected').hidden = true;
   document.getElementById('info').innerHTML = '';
 }
@@ -804,6 +898,21 @@ async function selectArea(kind, id, animate) {
       ${pct(a.school_catchment.assigned_share_800)} within 800 m, median ${num(a.school_catchment.median_assigned_m)} m;
       ${pct(a.school_catchment.assigned_nearest_share)} assigned to their nearest ОУ or СОУ and
       ${pct(a.school_catchment.assigned_farther_share)} to one at least 400 m farther.</div>` : ''}
+    <h4>Public transport</h4>
+    ${a.transit_access && a.transit_access.people ? (t => `<table class="access">
+      <tr><th></th><th>residents</th></tr>
+      <tr><td>a stop within 400 m</td><td>${pct(t.transit_share_400)}</td></tr>
+      <tr><td>12+ an hour, weekday 7–9</td><td>${pct(t.frequent_share)}</td></tr>
+      <tr><td>12+ an hour, weekday 20–23</td><td>${pct(t.evening_share)}</td></tr>
+      <tr><td>12+ an hour, Saturday 10–18</td><td>${pct(t.saturday_share)}</td></tr>
+      <tr><td>12+ an hour, Sunday 10–18</td><td>${pct(t.sunday_share)}</td></tr>
+      <tr><td>1+ an hour, 1–4 at night</td><td>${pct(t.night_share)}</td></tr>
+    </table>
+    <div class="sub">Departures within 400 m in a straight line, all lines and both directions (timetable 2026,
+      residents 2019); the median building has ${num(t.median_peak_per_hour)} an hour on weekdays 7–9.</div>
+    ${t.sofiaplan_transit_share_400 != null ? `<div class="sub" style="margin-top:6px">Sofiaplan (2021, 400 m on foot):
+      ${pct(t.sofiaplan_transit_share_400)} of residents near a stop; we find ${pct(t.transit_share_400)}.</div>` : ''}`)(a.transit_access)
+      : '<div class="empty">No residents in the 2019 building data.</div>'}
     ${a.districts ? `<h4>District${a.districts.length > 1 ? 's' : ''}</h4><ul>` + a.districts.map(d => `<li>
         <a href="#" data-area="district:${esc(d.code)}">${esc(d.name)}</a>
         <span class="sub">${pct(d.share)} of the area · ${num(d.population)} residents${d.main ? ' · main' : ''}</span></li>`).join('') + '</ul>' : ''}
@@ -931,6 +1040,81 @@ function selectSchool(id, animate) {
       children 2019, straight line.</span></dd>`;
   }).catch(err => { const el = document.getElementById('school-catchment');
     if (el) el.textContent = /: 404$/.test(err.message) ? 'not in the city list (2026)' : 'not available'; });
+}
+
+// A stop's lines and how many departures leave it in each clock hour of
+// the reference days; the stop itself comes from the list of stops.
+async function selectTransitStop(id, animate) {
+  id = String(id);
+  select('transit_stop', id);
+  if (!transitStops) await loadTransit().catch(() => {});
+  if (!isSelected('transit_stop', id)) return;
+  const f = transitStops?.features.find(f => f.properties.id === id);
+  if (!f) return clearSelection();
+  const p = f.properties;
+  const st = p.metro_station_id && stations.features.find(s => s.id === p.metro_station_id);
+  highlight([f.geometry.coordinates]);
+  moveTo(f.geometry.coordinates, 16, animate);
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.name || 'Stop ' + p.id)}</h3>
+    <div>${arr(p.modes).map(m => `<span class="chip" style="background:${MODE_COLORS[m]}">${esc(MODE_LABEL[m])}</span>`).join(' ')}
+         ${p.served ? '' : '<span class="status">never served</span>'}
+         ${p.code ? `<span class="sub">code ${esc(p.code)}</span>` : ''}</div>
+    <dl>
+      <dt>Departures</dt><dd>${p.served ? `${num(p.peak_per_hour)} an hour on weekdays 7–9, ${num(p.evening_per_hour)} at 20–23,
+          ${num(p.night_per_hour)} at 1–4 at night; ${num(p.saturday_per_hour)} on Saturday and ${num(p.sunday_per_hour)}
+          on Sunday 10–18 <span class="sub">(all lines, both directions)</span>`
+        : 'none on the reference days <span class="sub">(see DATA_ISSUES #44)</span>'}</dd>
+      ${st ? `<dt>Metro</dt><dd><a href="#" data-station="${st.id}">${esc(st.properties.name || 'station')}</a></dd>` : ''}
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)} <span class="sub">(timetable; every time is an estimate, DATA_ISSUES #48)</span></dd>
+    </dl>
+    <div id="transit-stop-detail" class="sub">${p.served ? 'loading…' : ''}</div>`;
+  const a = document.querySelector('#info a[data-station]');
+  if (a) a.onclick = e => { e.preventDefault(); selectStation(+a.dataset.station); };
+  if (!p.served) return;
+  getJSON(`/api/transit/stops/${encodeURIComponent(id)}`).then(d => {
+    if (!isSelected('transit_stop', id)) return;
+    const max = Math.max(1, ...Object.values(d.hours).flat());
+    const bars = (day, label) => `<span>${label}</span>` + d.hours[day].map((n, h) =>
+      `<i style="height:${Math.round(n / max * 28)}px" title="${h}:00–${h + 1}:00 · ${n} departures"></i>`).join('');
+    document.getElementById('transit-stop-detail').outerHTML = `
+      <h4>Lines</h4>
+      <ul>${(d.routes || []).map(r => `<li><a href="#" data-route="${esc(r.id)}" class="chip"
+          style="background:${r.color};color:${r.text_color};text-decoration:none">${esc(r.name)}</a>
+        <span class="sub">${esc(MODE_LABEL[r.mode])} to ${esc((r.headsigns || []).join(', '))} · ${num(r.weekday)} on a weekday</span></li>`).join('')}</ul>
+      <h4>Departures by hour</h4>
+      <div class="hours">${bars('weekday', 'weekday')}${bars('saturday', 'Saturday')}${bars('sunday', 'Sunday')}
+        <span></span>${Array.from({ length: 24 }, (_, h) => `<span>${h % 6 ? '' : h}</span>`).join('')}</div>
+      <div class="sub">On ${esc(d.days.weekday)}, ${esc(d.days.saturday)} and ${esc(d.days.sunday)}, by the clock hour of departure.</div>`;
+    document.querySelectorAll('#info a[data-route]').forEach(l => l.onclick = e => {
+      e.preventDefault(); selectTransitRoute(l.dataset.route);
+    });
+  }).catch(() => { const el = document.getElementById('transit-stop-detail'); if (el) el.textContent = 'not available'; });
+}
+
+// A line from the timetable: where it runs and how many trips it makes.
+async function selectTransitRoute(id, animate) {
+  id = String(id);
+  select('transit_route', id);
+  if (!transitRoutes) await loadTransit().catch(() => {});
+  if (!isSelected('transit_route', id)) return;
+  // The lines without trips have no shape and are not on the map.
+  const f = transitRoutes?.features.find(f => f.properties.id === id);
+  if (!f) return clearSelection();
+  const p = f.properties;
+  highlight([]);
+  map.setFilter('transit-routes-selected', ['==', ['get', 'id'], id]);
+  map.fitBounds(bounds(f.geometry), { padding: 60, maxZoom: 15, animate: animate !== false });
+  document.getElementById('info').innerHTML = `
+    <h3><span class="chip" style="background:${p.color};color:${p.text_color}">${esc(p.name)}</span> ${esc(p.long_name || '')}</h3>
+    <div><span class="status">${p.night ? 'night bus' : esc(MODE_LABEL[p.mode])}</span></div>
+    <dl>
+      <dt>Trips</dt><dd>${num(p.trips_weekday)} on a weekday, ${num(p.trips_saturday)} on Saturday,
+          ${num(p.trips_sunday)} on Sunday <span class="sub">(both directions, ordinary days in October 2026)</span></dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
 }
 </script>
 </body>
