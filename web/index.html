@@ -123,9 +123,13 @@
   <select id="area-metric"></select>
   <div id="area-legend" class="legend"></div>
 
+  <!-- Each legend shows only while one of its layers is drawn on screen. -->
+  <div data-legend="stations,station-labels,tracks-existing,tracks-planned,outlines-fill" hidden>
   <h2>Lines</h2>
   <div id="lines"></div>
+  </div>
 
+  <div data-legend="entrances" hidden>
   <h2>Entrances: wheelchair access</h2>
   <div class="legend">
     <span><i class="dot" style="background:var(--ok)"></i>yes</span>
@@ -133,12 +137,17 @@
     <span><i class="dot" style="background:var(--bad)"></i>no</span>
     <span><i class="dot" style="background:var(--unknown)"></i>not tagged</span>
   </div>
+  </div>
 
+  <div data-legend="parks-fill,park-entrances" hidden>
   <h2>Parks</h2>
   <div id="park-legend" class="legend"></div>
+  </div>
 
+  <div data-legend="kindergartens,schools" hidden>
   <h2>Kindergartens and schools</h2>
   <div id="education-legend" class="legend"></div>
+  </div>
 
   <h2>Selected</h2>
   <div id="info"><div class="empty">Click a station, a park, a school, an entrance or an area on the map.</div></div>
@@ -334,6 +343,10 @@ map.on('load', async () => {
   bindToggles();
   bindAreaControls();
   bindFocusMenu();
+  // Shortly after the last frame of a move, zoom or layer switch. ('idle'
+  // can wait a long time on the base map's tiles.)
+  let legendTimer = null;
+  map.on('render', () => { clearTimeout(legendTimer); legendTimer = setTimeout(updateLegends, 200); });
 
   for (const id of ['stations', 'outlines-fill']) {
     map.on('click', id, e => selectStation(e.features[0].properties.id));
@@ -499,6 +512,14 @@ function renderIssueGroups(issues) {
     else if (i.kindergarten_id) selectKindergarten(i.kindergarten_id); else if (i.school_id) selectSchool(i.school_id);
     else if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
   };
+}
+
+function updateLegends() {
+  document.querySelectorAll('[data-legend]').forEach(box => {
+    const layers = box.dataset.legend.split(',').filter(id => map.getLayoutProperty(id, 'visibility') !== 'none');
+    // Below a layer's minzoom nothing is drawn, so its legend hides too.
+    box.hidden = !layers.length || !map.queryRenderedFeatures({ layers }).length;
+  });
 }
 
 function bindToggles() {
