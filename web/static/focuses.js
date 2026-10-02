@@ -7,11 +7,13 @@ const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Population'
 
 // Keys of the layer toggles in the sidebar (data-key).
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
-                      'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools'];
+                      'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools',
+                      'transit-stops', 'transit-routes'];
 const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 
 // Planned parks stay off: they are master plan zones, much of it forest.
-const ALL_LAYERS = FOCUS_LAYERS.filter(k => k !== 'planned-parks');
+// So does public transport: 3,500 stops and 140 lines would bury the rest.
+const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes'].includes(k));
 
 const FOCUSES = [
   { id: 'overview', category: null, title: 'Overview',
@@ -45,6 +47,29 @@ const FOCUSES = [
     question: 'Which neighbourhoods gain the most from the planned stations?',
     layers: ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations'],
     areas: { kind: 'neighbourhood', metric: 'gain_500' }, list: 'stations', drawer: 'open' },
+  { id: 'transit-frequency', category: 'Transport', title: 'Public transport frequency',
+    question: 'How often does a bus, tram, trolleybus or metro leave within 400 m of home at the weekday morning rush?',
+    layers: ['transit-stops'], areas: { kind: 'neighbourhood', metric: 'median_peak_per_hour' },
+    list: 'transit-stops', drawer: 'open', minZoom: 13 },
+  { id: 'transit-evenings', category: 'Transport', title: 'Public transport in the evening',
+    question: 'Who still has 12 or more departures an hour within 400 m on weekday evenings (20–23)?',
+    layers: ['transit-stops'], areas: { kind: 'neighbourhood', metric: 'evening_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'transit-weekends', category: 'Transport', title: 'Public transport on Sundays',
+    question: 'Who has 12 or more departures an hour within 400 m on a Sunday (10–18)?',
+    layers: ['transit-stops'], areas: { kind: 'neighbourhood', metric: 'sunday_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'transit-night', category: 'Transport', title: 'Night service',
+    question: 'Who has public transport within 400 m at least once an hour between 1 and 4 at night?',
+    layers: ['transit-routes'], areas: { kind: 'neighbourhood', metric: 'night_share' },
+    list: 'transit-routes', drawer: 'open' },
+  { id: 'transit-lines', category: 'Transport', title: 'Public transport lines',
+    question: 'Where does each bus, trolleybus, tram and metro line run, and how many trips does it make?',
+    layers: ['transit-routes', 'transit-stops'], areas: null, list: 'transit-routes', listScope: 'all', drawer: 'open' },
+  { id: 'sofiaplan-transit', category: 'Transport', title: "Public transport: Sofiaplan's measure",
+    question: "How does Sofiaplan's walking access to a stop (2021) compare with our straight line to a stop served today?",
+    layers: ['transit-stops'], areas: { kind: 'neighbourhood', metric: 'sofiaplan_transit_share_400' },
+    list: 'areas', drawer: 'open' },
   { id: 'park-access', category: 'Green spaces', title: 'Park access',
     question: 'How many residents live within 300 m of a park entrance?',
     layers: ['parks', 'park-entrances'], areas: { kind: 'neighbourhood', metric: 'park_share_300' },

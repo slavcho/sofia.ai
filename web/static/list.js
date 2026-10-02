@@ -1,10 +1,11 @@
 // The drawer under the map: a sortable table of the schools,
-// kindergartens, parks, stations, areas or data issues in view (or in
-// the whole city), with a CSV download of exactly what it shows.
+// kindergartens, parks, stations, public transport stops and lines, areas
+// or data issues in view (or in the whole city), with a CSV download of
+// exactly what it shows.
 //
 // Uses the page's data and functions (schools, kgs, parks, stations,
-// areaCache, allIssues, select*), so it is loaded before the page's
-// script but only called once the data is in.
+// transitStops, transitRoutes, areaCache, allIssues, select*), so it is
+// loaded before the page's script but only called once the data is in.
 
 const DATE_COLUMNS = [
   { label: 'Data as of', value: p => p.data_as_of, csvOnly: true },
@@ -76,6 +77,39 @@ const LISTS = {
       { label: 'Status', value: p => p.status },
       { label: 'Entrances', value: p => p.entrances, num: true },
       { label: 'Wheelchair entrances', value: p => p.wheelchair_entrances, num: true },
+      ...DATE_COLUMNS],
+  },
+  // Public transport loads on first use; the list asks for it too.
+  'transit-stops': {
+    label: 'Public transport stops', noun: 'stops',
+    empty: () => transitStops ? '' : (loadTransit().catch(() => {}), 'Loading the timetable…'),
+    rows: () => !transitStops ? [] : transitStops.features.map(f => ({ p: f.properties, geometry: f.geometry,
+                                                    open: () => selectTransitStop(f.properties.id) })),
+    columns: [
+      { label: 'Name', value: p => p.name },
+      { label: 'Code', value: p => p.code },
+      { label: 'Modes', value: p => arr(p.modes).join(' ') },
+      { label: 'Lines', value: p => arr(p.routes).join(' ') },
+      // Departures an hour, all lines and both directions (timetable 2026).
+      { label: 'Weekday 7–9', value: p => p.peak_per_hour, num: true },
+      { label: 'Weekday 20–23', value: p => p.evening_per_hour, num: true },
+      { label: 'Saturday 10–18', value: p => p.saturday_per_hour, num: true },
+      { label: 'Sunday 10–18', value: p => p.sunday_per_hour, num: true },
+      { label: 'Night 1–4', value: p => p.night_per_hour, num: true },
+      ...DATE_COLUMNS],
+  },
+  'transit-routes': {
+    label: 'Public transport lines', noun: 'lines',
+    empty: () => transitRoutes ? '' : (loadTransit().catch(() => {}), 'Loading the timetable…'),
+    rows: () => !transitRoutes ? [] : transitRoutes.features.map(f => ({ p: f.properties, geometry: f.geometry,
+                                                      open: () => selectTransitRoute(f.properties.id) })),
+    columns: [
+      { label: 'Line', value: p => p.name },
+      { label: 'Mode', value: p => p.night ? 'night bus' : MODE_LABEL[p.mode] },
+      { label: 'Route', value: p => p.long_name },
+      { label: 'Weekday trips', value: p => p.trips_weekday, num: true },
+      { label: 'Saturday trips', value: p => p.trips_saturday, num: true },
+      { label: 'Sunday trips', value: p => p.trips_sunday, num: true },
       ...DATE_COLUMNS],
   },
   // The areas shown on the map, with the metric they are coloured by.
