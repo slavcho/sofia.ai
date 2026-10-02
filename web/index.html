@@ -149,17 +149,12 @@
   <label class="toggle"><input type="checkbox" data-key="schools" data-layers="schools" checked> Schools</label>
   </details>
 
-  <h2>Areas</h2>
-  <select id="area-kind">
-    <option value="">No areas</option>
-    <option value="district">Districts (райони)</option>
-    <option value="neighbourhood">Neighbourhoods (квартали)</option>
-    <option value="planning_unit">Planning units</option>
-  </select>
-  <select id="area-metric"></select>
-  <div id="area-legend" class="legend"></div>
-
   <!-- Each legend shows only while one of its layers is drawn on screen. -->
+  <div data-legend="areas-fill" hidden>
+  <h2 id="area-legend-title"></h2>
+  <div id="area-legend" class="legend"></div>
+  </div>
+
   <div data-legend="stations,station-labels,tracks-existing,tracks-planned,outlines-fill" hidden>
   <h2>Lines</h2>
   <div id="lines"></div>
@@ -289,7 +284,8 @@ const AREA_FILE = { district: 'regions_sofia.geojson (GIS Sofia)',
                     planning_unit: 'ge_26_sofpr_20200616 (Sofiaplan)' };
 
 let lines = {}, stations = null, entrances = null, parks = null, gates = null, kgs = null, schools = null;
-let areaKind = '', areaCache = {}, selection = null, allIssues = [];
+// The area level and the metric they are coloured by; set by the focus.
+let areaKind = '', areaMetric = 'share_500', areaCache = {}, selection = null, allIssues = [];
 const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
 const num = v => v == null ? '—' : Number(v).toLocaleString();
 
@@ -400,7 +396,7 @@ map.on('load', async () => {
   renderIssues([...tag(issues, 'Metro'), ...tag(areaIssues, 'Areas'), ...tag(parkIssues, 'Parks'),
                 ...tag(eduIssues, 'Kindergartens and schools'), ...tag(catchmentIssues, 'School catchments')]);
   bindToggles();
-  bindAreaControls();
+  paintAreas();
   bindList();
   bindFocusMenu();
   bindSelected();
@@ -506,7 +502,7 @@ function applyFocus(id) {
     const on = currentFocus.layers.includes(cb.dataset.key);
     if (cb.checked !== on) { cb.checked = on; cb.dispatchEvent(new Event('change')); }
   });
-  if (currentFocus.areas?.metric) document.getElementById('area-metric').value = currentFocus.areas.metric;
+  if (currentFocus.areas?.metric) areaMetric = currentFocus.areas.metric;
   setAreaKind(currentFocus.areas?.kind || '');
   document.getElementById('issues-panel').hidden = currentFocus.panel !== 'issues';
   setList(currentFocus.list || 'schools', currentFocus.listScope || 'view');
@@ -616,19 +612,8 @@ function moveTo(center, zoom, animate) {
   animate === false ? map.jumpTo(view) : map.flyTo(view);
 }
 
-function bindAreaControls() {
-  const metric = document.getElementById('area-metric');
-  metric.innerHTML = Object.entries(METRICS).map(([k, m]) => `<option value="${k}">${esc(m.label)}</option>`).join('');
-  metric.disabled = true;
-  metric.onchange = () => paintAreas();
-  document.getElementById('area-kind').onchange = e => setAreaKind(e.target.value);
-  paintAreas();
-}
-
 async function setAreaKind(kind) {
   areaKind = kind;
-  document.getElementById('area-kind').value = kind;
-  document.getElementById('area-metric').disabled = !kind;
   if (kind && !areaCache[kind]) areaCache[kind] = await getJSON('/api/areas/' + kind);
   if (areaKind !== kind) return;          // changed again while loading
   map.getSource('areas').setData(kind ? areaCache[kind] : { type: 'FeatureCollection', features: [] });
@@ -638,8 +623,7 @@ async function setAreaKind(kind) {
 }
 
 function paintAreas() {
-  const m = METRICS[document.getElementById('area-metric').value];
-  const key = document.getElementById('area-metric').value;
+  const m = METRICS[areaMetric], key = areaMetric;
   const steps = m.colors.flatMap((c, i) => i ? [m.breaks[i - 1], c] : [c]);
   map.setPaintProperty('areas-fill', 'fill-color',
     ['case', ['<', ['coalesce', ['get', 'population'], 0], MIN_PEOPLE], NO_DATA,
@@ -648,6 +632,7 @@ function paintAreas() {
   const labels = m.colors.map((_, i) =>
     i === 0 ? '< ' + fmt(m.breaks[0]) : i === m.colors.length - 1 ? '≥ ' + fmt(m.breaks[i - 1])
             : fmt(m.breaks[i - 1]) + '–' + fmt(m.breaks[i]));
+  document.getElementById('area-legend-title').textContent = `${{ district: 'Districts', neighbourhood: 'Neighbourhoods', planning_unit: 'Planning units' }[areaKind] || 'Areas'}: ${m.label}`;
   document.getElementById('area-legend').innerHTML = !areaKind ? '' :
     m.colors.map((c, i) => `<span><i class="swatch" style="background:${c}"></i>${labels[i]}</span>`).join('') +
     `<span><i class="swatch" style="background:${NO_DATA}"></i>&lt; ${MIN_PEOPLE} residents</span>`;
@@ -754,7 +739,8 @@ async function selectArea(kind, id, animate) {
   select(kind, id);
   if (areaKind !== kind) await setAreaKind(kind);
   const a = await getJSON(`/api/areas/${kind}/${id}`).catch(() => null);
-  if (!a || !isSelected(kind, id)) return;
+  if (!isSelected(kind, id)) return;
+  if (!a) return clearSelection();        // e.g. an old or mistyped ?area= link
   map.setFilter('areas-selected', ['==', ['get', 'id'], id]);
   map.fitBounds(a.bbox, { padding: 40, maxZoom: 16, animate: animate !== false });
   const x = a.extra, m = a.access, e = a.education_access;

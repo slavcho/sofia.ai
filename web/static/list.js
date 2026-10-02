@@ -82,18 +82,19 @@ const LISTS = {
   areas: {
     label: 'Areas', noun: () => ({ district: 'districts', neighbourhood: 'neighbourhoods',
                                    planning_unit: 'planning-units' })[areaKind] || 'areas',
-    empty: () => areaKind ? '' : 'Choose districts, neighbourhoods or planning units under Areas in the sidebar.',
+    empty: () => areaKind ? '' : 'This focus does not colour any areas; pick one that does from the Focus menu.',
     rows: () => !areaKind || !areaCache[areaKind] ? [] : areaCache[areaKind].features.map(f => ({
       p: f.properties, geometry: f.geometry, open: () => selectArea(areaKind, f.properties.id) })),
     columns: () => {
-      const key = document.getElementById('area-metric').value, m = METRICS[key];
+      const key = areaMetric, m = METRICS[key];
       return [
         { label: 'Name', value: p => p.name },
         { label: 'Residents', value: p => p.population, num: true },
         { label: 'Residents per km²', value: p => p.density, num: true },
-        { label: m.label, num: true,
+        // Density is already a column of its own.
+        ...key === 'density' ? [] : [{ label: m.label, num: true,
           value: p => p[key] == null ? null : m.pct ? Math.round(p[key] * 1000) / 10 : p[key],
-          suffix: m.pct ? '%' : '' }];
+          suffix: m.pct ? '%' : '' }]];
     },
   },
   // Follows the source filter of the data issues panel.
@@ -227,6 +228,6 @@ function bindList() {
     if (listHold) { listHold = false; return; }
     if (listScope === 'view') renderList();
   });
-  ['show-planned', 'show-planned-parks', 'issue-source', 'area-metric'].forEach(id =>
+  ['show-planned', 'show-planned-parks', 'issue-source'].forEach(id =>
     document.getElementById(id).addEventListener('change', renderList));
 }

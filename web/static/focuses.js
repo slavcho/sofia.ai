@@ -3,7 +3,7 @@
 // LLM from a question) can be checked against the layers, area kinds and
 // metrics we actually have before they are shown.
 
-const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Technical'];
+const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Population', 'Technical'];
 
 // Keys of the layer toggles in the sidebar (data-key).
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
@@ -29,6 +29,14 @@ const FOCUSES = [
     question: 'Where do children live more than 500 m from a kindergarten?',
     layers: ['kindergartens'], areas: { kind: 'neighbourhood', metric: 'kindergarten_share_500' },
     list: 'kindergartens', drawer: 'open', minZoom: 12 },
+  { id: 'kindergarten-places', category: 'Education', title: 'Kindergarten places',
+    question: 'How many children are registered in municipal kindergartens per child aged 0–14 living in each district?',
+    layers: ['kindergartens'], areas: { kind: 'district', metric: 'registered_per_child' },
+    list: 'areas', drawer: 'open' },
+  { id: 'sofiaplan-schools', category: 'Education', title: "Schools: Sofiaplan's measure",
+    question: "How does Sofiaplan's walking distance to schools (2019) compare with our straight-line one?",
+    layers: ['schools'], areas: { kind: 'neighbourhood', metric: 'sofiaplan_school_share_800' },
+    list: 'areas', drawer: 'open', minZoom: 12 },
   { id: 'metro-access', category: 'Transport', title: 'Metro access',
     question: 'How many residents live within 500 m of a metro station?',
     layers: ['stations', 'outlines', 'entrances', 'tracks'],
@@ -45,6 +53,14 @@ const FOCUSES = [
     question: 'Who lives within 800 m of one of the large city parks?',
     layers: ['parks'], areas: { kind: 'neighbourhood', metric: 'city_park_share_800' },
     list: 'parks', drawer: 'open' },
+  { id: 'sofiaplan-parks', category: 'Green spaces', title: "Parks: Sofiaplan's measure",
+    question: "Which neighbourhoods have walking access to green space according to Sofiaplan (2021), and does it agree with ours?",
+    layers: ['parks'], areas: { kind: 'neighbourhood', metric: 'sofiaplan_park_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'density', category: 'Population', title: 'Population density',
+    question: 'Where do the residents live? Residents per km² of each planning unit (2019).',
+    layers: [], areas: { kind: 'planning_unit', metric: 'density' },
+    list: 'areas', drawer: 'open' },
   { id: 'data-issues', category: 'Technical', title: 'Data issues',
     question: 'Where are the source data missing, wrong, or in disagreement with each other?',
     layers: ALL_LAYERS, areas: null, panel: 'issues',
