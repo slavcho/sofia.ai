@@ -248,9 +248,18 @@ def schools():
                        'funding_code', s.funding_code, 'class_count', s.class_count,
                        'note', s.note, 'address', s.address, 'district_code', s.district_code,
                        'details_url', s.details_url,
+                       -- the city's catchment (2026); children NULL where
+                       -- the 2019 residents do not reach (DATA_ISSUES #41)
+                       'catchment_addresses', c.addresses,
+                       'catchment_buildings', NULLIF(k.buildings, 0),
+                       'catchment_children', CASE WHEN k.buildings > 0 THEN k.children END,
+                       'catchment_median_m', k.median_distance_m,
+                       'catchment_nearest_share', round(k.buildings_nearest::numeric / NULLIF(k.buildings, 0), 3),
                        'data_as_of', s.data_as_of,
                        'source', s.source_dataset || ' #' || s.source_fid)) AS feature
           FROM schools s
+          LEFT JOIN catchment_schools c ON c.school_id = s.id
+          LEFT JOIN catchment_school_children k ON k.list_id = c.list_id
          ORDER BY s.id
     """))
 

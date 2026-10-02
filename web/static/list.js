@@ -30,6 +30,11 @@ const LISTS = {
       { label: 'Classes', value: p => p.class_count, num: true },
       { label: 'District', value: p => districtName(p.district_code) },
       { label: 'Address', value: p => p.address },
+      // From the city's catchment list (2026) and the residents (2019).
+      { label: 'Catchment children', value: p => p.catchment_children, num: true },
+      { label: 'Median distance (m)', value: p => p.catchment_median_m, num: true },
+      { label: 'Nearest school for', num: true, suffix: '%',
+        value: p => p.catchment_nearest_share == null ? null : Math.round(p.catchment_nearest_share * 100) },
       ...DATE_COLUMNS],
   },
   kindergartens: {
