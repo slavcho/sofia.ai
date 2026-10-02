@@ -491,6 +491,9 @@ function applyFocus(id) {
   document.getElementById('issues-panel').hidden = currentFocus.panel !== 'issues';
   setList(currentFocus.list || 'schools', currentFocus.listScope || 'view');
   foldDrawer(currentFocus.drawer !== 'open');
+  // Schools and kindergartens are not drawn below zoom 12; zoom in on
+  // the same centre, but never out, and leave later zooming to the user.
+  if (currentFocus.minZoom && map.getZoom() < currentFocus.minZoom) map.easeTo({ zoom: currentFocus.minZoom });
   document.getElementById('focus-title').textContent = currentFocus.title;
   document.getElementById('focus-heading').textContent = currentFocus.title;
   document.getElementById('focus-question').textContent = currentFocus.question;
