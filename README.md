@@ -10,6 +10,7 @@ PostGIS index over it. The mission and directives are in
     psql -v ON_ERROR_STOP=1 -d urbandata -f db/schema.sql
     python3 sync.py        # download the portal into data/
     python3 load_db.py     # load data/ into the database
+    python3 load_gtfs.py   # the public transport timetable into schema gtfs
 
 ## Principles for agents
 
@@ -40,8 +41,13 @@ PostGIS index over it. The mission and directives are in
   - `layers`: one per loaded file (or sheet, or zip member).
   - `features`: every object and table row: `properties` (jsonb, the
     original attributes) and `geom` (EPSG:4326, NULL for plain tables).
+- **Timetable:** schema `gtfs`, filled by `load_gtfs.py`: the static GTFS
+  feed of the Center for Urban Mobility, one text table per file as
+  published (`gtfs.stops`, `gtfs.stop_times`, ...). `gtfs.feed` names the
+  file, its source and when it was downloaded. Interpreted in
+  `db/city/transit.sql`.
 - **Not in the database yet:** rasters (elevation, slope, orthophotos, drone
-  surveys), GTFS timetables and the live feeds (parking, vehicle positions).
+  surveys) and the live feeds (parking, vehicle positions, trip updates).
 
 ## Querying
 
