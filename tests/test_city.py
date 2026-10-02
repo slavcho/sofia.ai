@@ -403,3 +403,82 @@ class BuildingCatchmentTest(unittest.TestCase):
         # 93.6% when written.
         self.assertGreater(self.scalar("""
             SELECT known_share FROM city.area_school_catchment WHERE area_kind = 'city'"""), 0.9)
+
+
+class TransitTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.transit_stops").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.transit_stops is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_every_feed_stop_is_in_one_stop(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM gtfs.stops g
+             WHERE coalesce(g.location_type, '0') = '0'
+               AND (SELECT count(*) FROM city.transit_stops s WHERE g.stop_id = ANY (s.gtfs_stop_ids)) <> 1"""), 0)
+
+    def test_merged_stops_are_one_place(self):
+        # Merged by the code on the sign; the farthest pair when written
+        # was 82 m apart (a metro station's stops on both sides).
+        self.assertLess(self.scalar("""
+            SELECT max(ST_Distance(ST_MakePoint(g.stop_lon::float8, g.stop_lat::float8)::geography, s.geom::geography))
+              FROM city.transit_stops s
+             CROSS JOIN unnest(s.gtfs_stop_ids) u(stop_id) JOIN gtfs.stops g USING (stop_id)"""), 150)
+
+    def test_served_means_departures(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.transit_stops s
+             WHERE s.served <> (cardinality(s.modes) > 0)"""), 0)
+        # A stop served only as some trips' last call has no departures,
+        # so the other way round need not hold; but most have.
+        self.assertGreater(self.scalar("""
+            SELECT count(DISTINCT stop_id)::float / (SELECT count(*) FROM city.transit_stops WHERE served)
+              FROM city.transit_stop_hours"""), 0.95)
+
+    def test_trips_past_midnight_count_on_the_next_day(self):
+        # Night lines run at 25:00-28:59 of the previous day's timetable.
+        self.assertGreater(self.scalar("""
+            SELECT sum(h.departures) FROM city.transit_stop_hours h
+             WHERE h.day = 'weekday' AND h.hour BETWEEN 1 AND 3
+               AND EXISTS (SELECT 1 FROM city.transit_routes r WHERE r.night AND r.id = ANY (h.route_ids))"""), 0)
+
+    def test_departures_match_the_timetable(self):
+        # Weekday departures from the feed directly, without the clock
+        # shift: Tuesday's own trips before midnight.
+        own = self.scalar("""
+            SELECT count(*) FROM gtfs.stop_times st
+              JOIN gtfs.trips t USING (trip_id)
+              JOIN gtfs.calendar_dates c ON c.service_id = t.service_id AND c.date = '20261006'
+             WHERE st.departure_time < '24'
+               AND st.stop_sequence::integer < (SELECT max(x.stop_sequence::integer) FROM gtfs.stop_times x
+                                                 WHERE x.trip_id = st.trip_id)""")
+        early = self.scalar("""
+            SELECT count(*) FROM gtfs.stop_times st
+              JOIN gtfs.trips t USING (trip_id)
+              JOIN gtfs.calendar_dates c ON c.service_id = t.service_id AND c.date = '20261005'
+             WHERE st.departure_time >= '24'
+               AND st.stop_sequence::integer < (SELECT max(x.stop_sequence::integer) FROM gtfs.stop_times x
+                                                 WHERE x.trip_id = st.trip_id)""")
+        self.assertEqual(self.scalar("SELECT sum(departures) FROM city.transit_stop_hours WHERE day = 'weekday'"),
+                         own + early)
+
+    def test_every_metro_station_is_matched(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.metro_stations m
+             WHERE m.status = 'existing'
+               AND NOT EXISTS (SELECT 1 FROM city.transit_stops s WHERE s.metro_station_id = m.id)"""), 0)
+
+    def test_every_running_line_has_a_shape(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.transit_routes
+             WHERE trips_weekday + trips_saturday + trips_sunday > 0 AND geom IS NULL"""), 0)

@@ -837,3 +837,91 @@ SELECT c.list_id, c.school_id, count(b.building_id) AS buildings,
   LEFT JOIN building_school_catchment b ON b.list_school_id = c.list_id
   LEFT JOIN building_residents r ON r.id = b.building_id
  GROUP BY c.list_id, c.school_id;
+
+-- ----------------------------------------------------- public transport
+--
+-- Stops, lines and how often they run, from the static GTFS timetable of
+-- the Center for Urban Mobility (schema gtfs, load_gtfs.py). Filled by
+-- transit.sql. The feed has no regular week: every service lists its
+-- dates, so one date stands for each kind of day (transit_days).
+
+CREATE TABLE IF NOT EXISTS transit_days (
+    day  text PRIMARY KEY CHECK (day IN ('weekday', 'saturday', 'sunday')),
+    date date NOT NULL                        -- its timetable stands for the day
+);
+
+-- A stop as people see it: one pole or shelter. The feed has one stop per
+-- mode (A0328 for buses, TB0328 for trolleybuses) with the same code on
+-- the sign, so those are merged by code. A metro station is one stop.
+CREATE TABLE IF NOT EXISTS transit_stops (
+    id             text PRIMARY KEY,          -- the code on the sign; the stop_id for the metro
+    code           text,                      -- stop_code in the feed
+    name           text,
+    modes          text[] NOT NULL,           -- bus, trolleybus, tram, metro; of the lines calling on a reference day
+    gtfs_stop_ids  text[] NOT NULL,
+    served         boolean NOT NULL,          -- some trip calls here on a reference day
+    metro_station_id integer REFERENCES metro_stations(id) ON DELETE SET NULL,  -- by location, within 300 m
+    geom           geometry(Point, 4326) NOT NULL,  -- centre of the merged stops
+    data_as_of     date NOT NULL,             -- the day the feed was downloaded
+    source_dataset text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS transit_stops_geom_idx ON transit_stops USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS transit_routes (
+    id             text PRIMARY KEY,          -- route_id in the feed
+    name           text NOT NULL,             -- as on the vehicle: 94, 5, M2, N1
+    long_name      text,                      -- termini
+    mode           text NOT NULL CHECK (mode IN ('bus', 'trolleybus', 'tram', 'metro')),
+    color          text,                      -- hex, without #
+    text_color     text,
+    night          boolean NOT NULL,          -- a night line (N1 .. N4)
+    trips_weekday  integer NOT NULL,
+    trips_saturday integer NOT NULL,
+    trips_sunday   integer NOT NULL,
+    geom           geometry(MultiLineString, 4326),  -- the shapes its trips run on the reference days
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS transit_routes_geom_idx ON transit_routes USING gist (geom);
+
+-- Departures by clock hour on each reference day. A trip past midnight
+-- counts on the day it runs: 25:10 of Monday's timetable is 01:10 on
+-- Tuesday. The last call of a trip is not a departure.
+CREATE TABLE IF NOT EXISTS transit_stop_hours (
+    stop_id    text NOT NULL REFERENCES transit_stops(id) ON DELETE CASCADE,
+    day        text NOT NULL REFERENCES transit_days(day),
+    hour       integer NOT NULL CHECK (hour BETWEEN 0 AND 23),
+    departures integer NOT NULL,
+    route_ids  text[] NOT NULL,
+    PRIMARY KEY (stop_id, day, hour)
+);
+
+-- Problems of the feed as a whole, worked out by transit.sql (the raw
+-- gtfs tables need not exist when this schema is applied).
+CREATE TABLE IF NOT EXISTS transit_feed_issues (
+    issue  text NOT NULL,
+    detail text
+);
+
+CREATE OR REPLACE VIEW transit_issues AS
+SELECT issue, NULL::text AS stop_id, NULL::text AS route_id, detail FROM transit_feed_issues
+UNION ALL
+SELECT 'stop never served', s.id, NULL,
+       format('%s (%s), no trip on the reference days', coalesce(s.name, '?'), array_to_string(s.gtfs_stop_ids, ', '))
+  FROM transit_stops s WHERE NOT s.served
+UNION ALL
+SELECT 'temporary stop', s.id, NULL, format('%s, %s', s.name, CASE WHEN s.served THEN 'served' ELSE 'not served' END)
+  FROM transit_stops s WHERE s.name ~* 'временн'
+UNION ALL
+SELECT 'Latin letter in a Cyrillic name', s.id, NULL, s.name
+  FROM transit_stops s WHERE s.name ~ '[А-Яа-я][A-Za-z]|[A-Za-z][А-Яа-я]'
+UNION ALL
+SELECT 'metro stop away from any station', s.id, NULL, s.name
+  FROM transit_stops s WHERE 'metro' = ANY (s.modes) AND s.metro_station_id IS NULL
+UNION ALL
+SELECT 'metro name differs', s.id, NULL, format('GTFS %s, Sofiaplan %s', s.name, m.name)
+  FROM transit_stops s JOIN metro_stations m ON m.id = s.metro_station_id
+ WHERE upper(translate(s.name, 'AEOPCTXaeopctx', 'АЕОРСТХаеорстх')) IS DISTINCT FROM upper(m.name)
+UNION ALL
+SELECT 'line without trips', NULL, r.id, format('%s %s, %s: no trip on the reference days', r.mode, r.name, r.long_name)
+  FROM transit_routes r WHERE r.trips_weekday + r.trips_saturday + r.trips_sunday = 0;
