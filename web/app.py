@@ -13,6 +13,7 @@ from pathlib import Path
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -20,6 +21,8 @@ DSN = os.environ.get("DATABASE_URL", "host=127.0.0.1 dbname=urbandata user=urban
 HERE = Path(__file__).resolve().parent
 
 app = FastAPI(title="sofia.ai")
+# The GeoJSON compresses about tenfold (the public transport stops are 1.5 MB).
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Only web/static, so that the app's own source is not served.
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
@@ -319,6 +322,112 @@ def school_catchment(school_id: int):
     """, {"id": school_id})
 
 
+# Departures per hour in the windows of transit_access.sql: weekday
+# 07-09 and 20-23, weekend 10-18, weekday nights 01-04.
+TRANSIT_WINDOWS = """
+    round(sum(departures) FILTER (WHERE day = 'weekday' AND hour BETWEEN 7 AND 8) / 2.0, 1) AS peak_per_hour,
+    round(sum(departures) FILTER (WHERE day = 'weekday' AND hour BETWEEN 20 AND 22) / 3.0, 1) AS evening_per_hour,
+    round(sum(departures) FILTER (WHERE day = 'saturday' AND hour BETWEEN 10 AND 17) / 8.0, 1) AS saturday_per_hour,
+    round(sum(departures) FILTER (WHERE day = 'sunday' AND hour BETWEEN 10 AND 17) / 8.0, 1) AS sunday_per_hour,
+    round(sum(departures) FILTER (WHERE day = 'weekday' AND hour BETWEEN 1 AND 3) / 3.0, 1) AS night_per_hour
+"""
+
+
+@app.get("/api/transit/stops")
+def transit_stops():
+    # Every stop in the timetable, the never served ones too (they are a
+    # data issue); the lines are those calling on any reference day.
+    return json_query(feature_collection(f"""
+        SELECT json_build_object(
+                   'type', 'Feature',
+                   'geometry', ST_AsGeoJSON(s.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', s.id, 'code', s.code, 'name', s.name, 'modes', s.modes,
+                       'served', s.served, 'metro_station_id', s.metro_station_id,
+                       'peak_per_hour', coalesce(h.peak_per_hour, 0),
+                       'evening_per_hour', coalesce(h.evening_per_hour, 0),
+                       'saturday_per_hour', coalesce(h.saturday_per_hour, 0),
+                       'sunday_per_hour', coalesce(h.sunday_per_hour, 0),
+                       'night_per_hour', coalesce(h.night_per_hour, 0),
+                       'routes', coalesce(r.names, '[]'),
+                       'data_as_of', s.data_as_of, 'source', s.source_dataset)) AS feature
+          FROM transit_stops s
+          LEFT JOIN (SELECT stop_id, {TRANSIT_WINDOWS} FROM transit_stop_hours GROUP BY stop_id) h
+                 ON h.stop_id = s.id
+          LEFT JOIN LATERAL (
+                SELECT json_agg(t.name ORDER BY t.mode, length(t.name), t.name) AS names
+                  FROM transit_routes t
+                 WHERE t.id IN (SELECT unnest(x.route_ids) FROM transit_stop_hours x WHERE x.stop_id = s.id)
+          ) r ON true
+         ORDER BY s.id
+    """))
+
+
+@app.get("/api/transit/routes")
+def transit_routes():
+    # Simplified to about 10 m; the lines without trips have no shape.
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature',
+                   'geometry', ST_AsGeoJSON(ST_SimplifyPreserveTopology(r.geom, 0.0001), 5)::json,
+                   'properties', json_build_object(
+                       'id', r.id, 'name', r.name, 'long_name', r.long_name, 'mode', r.mode,
+                       'color', '#' || coalesce(r.color, '9aa0a8'),
+                       'text_color', '#' || coalesce(r.text_color, 'ffffff'),
+                       'night', r.night, 'trips_weekday', r.trips_weekday,
+                       'trips_saturday', r.trips_saturday, 'trips_sunday', r.trips_sunday,
+                       'data_as_of', r.data_as_of, 'source', r.source_dataset)) AS feature
+          FROM transit_routes r
+         WHERE r.geom IS NOT NULL
+         ORDER BY r.mode, length(r.name), r.name
+    """))
+
+
+@app.get("/api/transit/stops/{stop_id}")
+def transit_stop(stop_id: str = PathParam(pattern=r"^[A-Za-z0-9_-]{1,32}$")):
+    # The lines calling here and the departures in each clock hour of the
+    # reference days (by line, for the card's timetable).
+    return json_query("""
+        SELECT (SELECT json_build_object(
+                    'id', s.id, 'name', s.name,
+                    'days', (SELECT json_object_agg(d.day, d.date) FROM transit_days d),
+                    'routes', (SELECT json_agg(json_build_object(
+                                   'id', r.id, 'name', r.name, 'mode', r.mode,
+                                   'color', '#' || coalesce(r.color, '9aa0a8'),
+                                   'text_color', '#' || coalesce(r.text_color, 'ffffff'),
+                                   'headsigns', (SELECT json_agg(DISTINCT x.headsign) FROM transit_departures x
+                                                  WHERE x.stop_id = s.id AND x.route_id = r.id),
+                                   'weekday', (SELECT count(*) FROM transit_departures x
+                                                WHERE x.stop_id = s.id AND x.route_id = r.id AND x.day = 'weekday'))
+                                   ORDER BY r.mode, length(r.name), r.name)
+                                 FROM transit_routes r
+                                WHERE r.id IN (SELECT unnest(h.route_ids) FROM transit_stop_hours h WHERE h.stop_id = s.id)),
+                    'hours', (SELECT json_object_agg(d.day, (
+                                  SELECT json_agg(coalesce(h.departures, 0) ORDER BY g.hour)
+                                    FROM generate_series(0, 23) g(hour)
+                                    LEFT JOIN transit_stop_hours h
+                                           ON h.stop_id = s.id AND h.day = d.day AND h.hour = g.hour))
+                                FROM transit_days d))
+                  FROM transit_stops s
+                 WHERE s.id = %(id)s)::text
+    """, {"id": stop_id})
+
+
+@app.get("/api/transit/issues")
+def transit_issues():
+    # Placed at the stop; the feed's and the lines' issues have no place.
+    return json_query("""
+        SELECT coalesce(json_agg(json_build_object(
+                   'issue', i.issue, 'detail', i.detail,
+                   'stop_id', i.stop_id, 'route_id', i.route_id,
+                   'lon', round(ST_X(s.geom)::numeric, 6),
+                   'lat', round(ST_Y(s.geom)::numeric, 6))
+                   ORDER BY i.issue, i.stop_id, i.route_id), '[]')::text
+          FROM transit_issues i
+          LEFT JOIN transit_stops s ON s.id = i.stop_id
+    """)
+
+
 # Area kinds: table, key column, the table linking the area to the
 # districts it lies in (none for a district), and kind-specific fields.
 AREAS = {
@@ -381,7 +490,15 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'registered_per_child', e.registered_per_child,
                        'sofiaplan_school_share_800', s.sofiaplan_share_800,
                        'assigned_school_share_800', c.assigned_share_800,
-                       'assigned_farther_share', c.assigned_farther_share)) AS feature
+                       'assigned_farther_share', c.assigned_farther_share,
+                       'transit_share_400', t.transit_share_400,
+                       'frequent_share', t.frequent_share,
+                       'evening_share', t.evening_share,
+                       'saturday_share', t.saturday_share,
+                       'sunday_share', t.sunday_share,
+                       'night_share', t.night_share,
+                       'median_peak_per_hour', t.median_peak_per_hour,
+                       'sofiaplan_transit_share_400', t.sofiaplan_transit_share_400)) AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
@@ -395,6 +512,8 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                  ON s.area_kind = %(kind)s AND s.area_id = a.{a['key']}::text
           LEFT JOIN area_school_catchment c
                  ON c.area_kind = %(kind)s AND c.area_id = a.{a['key']}::text
+          LEFT JOIN area_transit_access t
+                 ON t.area_kind = %(kind)s AND t.area_id = a.{a['key']}::text
          ORDER BY a.{a['key']}
     """), {"kind": kind})
 
@@ -432,6 +551,8 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                           WHERE s.area_kind = %(kind)s AND s.area_id = a.{a['key']}::text),
                     'school_catchment', (SELECT row_to_json(c) FROM area_school_catchment c
                                           WHERE c.area_kind = %(kind)s AND c.area_id = a.{a['key']}::text),
+                    'transit_access', (SELECT row_to_json(t) FROM area_transit_access t
+                                        WHERE t.area_kind = %(kind)s AND t.area_id = a.{a['key']}::text),
                     'districts', {districts},
                     'issues', (SELECT json_agg(json_build_object('issue', i.issue, 'detail', i.detail))
                                  FROM area_issues i
