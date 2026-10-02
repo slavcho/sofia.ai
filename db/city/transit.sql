@@ -11,6 +11,7 @@
 SET search_path = city, public;
 BEGIN;
 
+DELETE FROM transit_departures;
 DELETE FROM transit_stop_hours;
 DELETE FROM transit_stops;
 DELETE FROM transit_routes;
@@ -46,7 +47,7 @@ WITH dates AS (
 ), last AS (
     SELECT trip_id, max(stop_sequence::integer) AS seq FROM gtfs.stop_times GROUP BY trip_id
 )
-SELECT d.day, t.trip_id, t.route_id, k.key AS stop_id,
+SELECT d.day, t.trip_id, t.route_id, t.trip_headsign AS headsign, k.key AS stop_id,
        d.service_date + make_interval(secs => split_part(st.departure_time, ':', 1)::integer * 3600
                                             + split_part(st.departure_time, ':', 2)::integer * 60
                                             + split_part(st.departure_time, ':', 3)::integer) AS at,
@@ -82,12 +83,6 @@ UPDATE transit_stops s
                             ORDER BY ST_Distance(m.outline::geography, s.geom::geography) LIMIT 1)
  WHERE s.id ~ '^M\d';
 
-INSERT INTO transit_stop_hours (stop_id, day, hour, departures, route_ids)
-SELECT stop_id, day, extract(hour FROM at)::integer, count(*), array_agg(DISTINCT route_id ORDER BY route_id)
-  FROM calls
- WHERE NOT is_last
- GROUP BY 1, 2, 3;
-
 -- A route's line is the shapes its trips run on the reference days.
 CREATE TEMP TABLE shape_lines ON COMMIT DROP AS
 SELECT shape_id, ST_MakeLine(ST_SetSRID(ST_MakePoint(shape_pt_lon::float8, shape_pt_lat::float8), 4326)
@@ -107,6 +102,15 @@ SELECT r.route_id, r.route_short_name, r.route_long_name, m.mode, r.route_color,
          WHERE l.shape_id IN (SELECT t.shape_id FROM gtfs.trips t WHERE t.route_id = r.route_id)),
        (SELECT data_as_of FROM feed), (SELECT source_dataset FROM feed)
   FROM gtfs.routes r JOIN route_modes m USING (route_id);
+
+INSERT INTO transit_departures (day, stop_id, route_id, trip_id, headsign, at)
+SELECT day, stop_id, route_id, trip_id, headsign, at FROM calls WHERE NOT is_last;
+ANALYZE transit_departures;
+
+INSERT INTO transit_stop_hours (stop_id, day, hour, departures, route_ids)
+SELECT stop_id, day, extract(hour FROM at)::integer, count(*), array_agg(DISTINCT route_id ORDER BY route_id)
+  FROM transit_departures
+ GROUP BY 1, 2, 3;
 
 -- What the feed as a whole lacks (see DATA_ISSUES.md).
 INSERT INTO transit_feed_issues (issue, detail)

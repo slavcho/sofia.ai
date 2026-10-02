@@ -884,9 +884,20 @@ CREATE TABLE IF NOT EXISTS transit_routes (
 );
 CREATE INDEX IF NOT EXISTS transit_routes_geom_idx ON transit_routes USING gist (geom);
 
--- Departures by clock hour on each reference day. A trip past midnight
--- counts on the day it runs: 25:10 of Monday's timetable is 01:10 on
--- Tuesday. The last call of a trip is not a departure.
+-- Every departure on the reference days, by clock time. A trip past
+-- midnight counts on the day it runs: 25:10 of Monday's timetable is
+-- 01:10 on Tuesday. The last call of a trip is not a departure.
+CREATE TABLE IF NOT EXISTS transit_departures (
+    day      text NOT NULL REFERENCES transit_days(day),
+    stop_id  text NOT NULL REFERENCES transit_stops(id) ON DELETE CASCADE,
+    route_id text NOT NULL REFERENCES transit_routes(id) ON DELETE CASCADE,
+    trip_id  text NOT NULL,                   -- trip_id in the feed
+    headsign text,
+    at       timestamp NOT NULL               -- local time
+);
+CREATE INDEX IF NOT EXISTS transit_departures_stop_idx ON transit_departures (stop_id, day, at);
+
+-- transit_departures by clock hour.
 CREATE TABLE IF NOT EXISTS transit_stop_hours (
     stop_id    text NOT NULL REFERENCES transit_stops(id) ON DELETE CASCADE,
     day        text NOT NULL REFERENCES transit_days(day),
@@ -925,3 +936,65 @@ SELECT 'metro name differs', s.id, NULL, format('GTFS %s, Sofiaplan %s', s.name,
 UNION ALL
 SELECT 'line without trips', NULL, r.id, format('%s %s, %s: no trip on the reference days', r.mode, r.name, r.long_name)
   FROM transit_routes r WHERE r.trips_weekday + r.trips_saturday + r.trips_sunday = 0;
+
+-- --------------------------------------------- public transport access
+--
+-- For each inhabited building (2019), the stops served within 400 m in a
+-- straight line (about 5 minutes' walk, the common planning norm) and
+-- how many vehicles leave from them in an hour, by time of day. Filled
+-- by transit_access.sql. A trip counts once however many of the nearby
+-- stops it calls at; both directions count (the feed has none). Times
+-- are clock times on the reference days (transit_days):
+--   peak      weekday 07:00-09:00
+--   evening   weekday 20:00-23:00
+--   saturday  Saturday 10:00-18:00
+--   sunday    Sunday 10:00-18:00
+--   night     weekday 01:00-04:00, when only night lines run
+CREATE TABLE IF NOT EXISTS building_transit_access (
+    building_id      integer PRIMARY KEY REFERENCES building_residents(id) ON DELETE CASCADE,
+    stop_id          text REFERENCES transit_stops(id) ON DELETE SET NULL,  -- nearest served stop
+    distance_m       numeric,
+    stops_400        integer NOT NULL,         -- served stops within 400 m
+    routes_400       integer NOT NULL,         -- lines leaving them on the weekday
+    peak_per_hour    numeric NOT NULL,         -- trips per hour from those stops
+    evening_per_hour numeric NOT NULL,
+    saturday_per_hour numeric NOT NULL,
+    sunday_per_hour  numeric NOT NULL,
+    night_per_hour   numeric NOT NULL,
+    sofiaplan_400    boolean NOT NULL          -- inside Sofiaplan's 0-400 m access zone (2021)
+);
+
+-- Shares of residents (2019). "Frequent" is 12 trips an hour or more
+-- within 400 m, both directions together: about one every 10 minutes
+-- each way. The same bar for the peak, the evening and the weekend, so
+-- they compare; "night" asks for at least one trip an hour.
+CREATE OR REPLACE VIEW area_transit_access AS
+WITH b AS (
+    SELECT r.people, r.district_code, r.neighbourhood_id, r.planning_unit_id, a.*
+      FROM building_residents r
+      JOIN building_transit_access a ON a.building_id = r.id
+), levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, b.* FROM b
+    UNION ALL SELECT 'district', b.district_code, b.* FROM b
+    UNION ALL SELECT 'neighbourhood', b.neighbourhood_id::text, b.* FROM b
+    UNION ALL SELECT 'planning_unit', b.planning_unit_id::text, b.* FROM b
+)
+SELECT area_kind, area_id,
+       sum(people) AS people,
+       round(coalesce(sum(people) FILTER (WHERE stops_400 > 0), 0)::numeric / nullif(sum(people), 0), 3) AS transit_share_400,
+       round(coalesce(sum(people) FILTER (WHERE peak_per_hour >= 12), 0)::numeric / nullif(sum(people), 0), 3) AS frequent_share,
+       round(coalesce(sum(people) FILTER (WHERE evening_per_hour >= 12), 0)::numeric / nullif(sum(people), 0), 3) AS evening_share,
+       round(coalesce(sum(people) FILTER (WHERE saturday_per_hour >= 12), 0)::numeric / nullif(sum(people), 0), 3) AS saturday_share,
+       round(coalesce(sum(people) FILTER (WHERE sunday_per_hour >= 12), 0)::numeric / nullif(sum(people), 0), 3) AS sunday_share,
+       round(coalesce(sum(people) FILTER (WHERE night_per_hour >= 1), 0)::numeric / nullif(sum(people), 0), 3) AS night_share,
+       round(coalesce(sum(people) FILTER (WHERE sofiaplan_400), 0)::numeric / nullif(sum(people), 0), 3) AS sofiaplan_transit_share_400,
+       -- Sofiaplan walked 400 m along streets in 2021, we draw a straight
+       -- line to today's served stops: "ours only" is expected, "theirs
+       -- only" means a stop near them that has no service now.
+       round(coalesce(sum(people) FILTER (WHERE stops_400 > 0 AND NOT sofiaplan_400), 0)::numeric / nullif(sum(people), 0), 3) AS transit_ours_only_share,
+       round(coalesce(sum(people) FILTER (WHERE stops_400 = 0 AND sofiaplan_400), 0)::numeric / nullif(sum(people), 0), 3) AS transit_theirs_only_share,
+       -- of the buildings, not weighted by people
+       round((percentile_cont(0.5) WITHIN GROUP (ORDER BY peak_per_hour))::numeric, 1) AS median_peak_per_hour
+  FROM levels
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;
