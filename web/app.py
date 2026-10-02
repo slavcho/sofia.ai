@@ -14,11 +14,14 @@ from pathlib import Path
 import psycopg
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 DSN = os.environ.get("DATABASE_URL", "host=127.0.0.1 dbname=urbandata user=urbanuser")
 HERE = Path(__file__).resolve().parent
 
 app = FastAPI(title="sofia.ai")
+# Only web/static, so that the app's own source is not served.
+app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
 
 def json_query(sql: str, params: dict | None = None) -> Response:

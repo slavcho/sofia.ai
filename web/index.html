@@ -19,7 +19,24 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
                font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  body { display: flex; }
+  body { display: flex; flex-direction: column; }
+  #bar { flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; height: 44px;
+         background: var(--bg); border-bottom: 1px solid var(--border); position: relative; z-index: 10; }
+  #bar .brand { font-weight: 700; }
+  #focus-button { font: inherit; color: var(--text); background: var(--panel); cursor: pointer;
+                  border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+  #focus-list { position: absolute; top: 40px; left: 16px; width: min(560px, calc(100vw - 32px));
+                max-height: calc(100vh - 60px); overflow-y: auto; background: var(--bg);
+                border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px 12px;
+                box-shadow: 0 6px 24px rgba(0,0,0,.18); }
+  #focus-list h2 { margin-top: 12px; }
+  .focus-item { display: block; width: 100%; text-align: left; font: inherit; color: var(--text);
+                background: none; border: 0; border-radius: 6px; padding: 6px 8px; cursor: pointer; }
+  .focus-item:hover, .focus-item[aria-current="true"] { background: var(--panel); }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #focus-heading { margin-bottom: 4px; }
+  details.section > summary { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+                              color: var(--muted); font-weight: 700; margin: 20px 0 8px; }
   #side { width: 340px; flex: none; height: 100%; overflow-y: auto;
           background: var(--panel); border-right: 1px solid var(--border); padding: 16px; }
   #map { flex: 1; height: 100%; }
@@ -56,28 +73,45 @@
   table.access th:first-child, table.access td:first-child { text-align: left; padding-left: 0; }
   #info h4 { margin: 12px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }
   @media (max-width: 720px) {
-    body { flex-direction: column-reverse; }
+    #main { flex-direction: column-reverse; }
     #side { width: 100%; height: 45%; border-right: 0; border-top: 1px solid var(--border); }
     #map { height: 55%; }
   }
 </style>
 </head>
 <body>
+<header id="bar">
+  <span class="brand">sofia.ai</span>
+  <div id="focus-menu">
+    <button id="focus-button" aria-haspopup="true" aria-expanded="false">Focus: <b id="focus-title">Overview</b> ▾</button>
+    <div id="focus-list" hidden></div>
+  </div>
+</header>
+<div id="main">
 <aside id="side">
-  <h1>Sofia metro, parks and schools</h1>
+  <h1 id="focus-heading">Overview</h1>
+  <div id="focus-question"></div>
   <div class="sub">Stations 2021 · entrances 2020 (OSM) · parks 2020 · kindergartens and schools 2018 · residents 2019 · urbandata.sofia.bg</div>
 
-  <h2>Layers</h2>
-  <label class="toggle"><input type="checkbox" data-layers="stations,station-labels" checked> Stations</label>
-  <label class="toggle"><input type="checkbox" data-layers="outlines-fill,outlines-line" checked> Station outlines</label>
-  <label class="toggle"><input type="checkbox" data-layers="entrances" checked> Entrances</label>
-  <label class="toggle"><input type="checkbox" data-layers="tracks-existing,tracks-planned" checked> Track</label>
-  <label class="toggle"><input type="checkbox" id="show-planned" checked> Planned stations</label>
-  <label class="toggle"><input type="checkbox" data-layers="parks-fill,parks-line" checked> Parks</label>
-  <label class="toggle"><input type="checkbox" data-layers="park-entrances" checked> Park entrances</label>
-  <label class="toggle"><input type="checkbox" id="show-planned-parks"> Planned parks</label>
-  <label class="toggle"><input type="checkbox" data-layers="kindergartens" checked> Kindergartens</label>
-  <label class="toggle"><input type="checkbox" data-layers="schools" checked> Schools</label>
+  <section id="issues-panel" hidden>
+  <h2>Data issues</h2>
+  <select id="issue-source"></select>
+  <div id="issues"></div>
+  </section>
+
+  <details class="section">
+  <summary>Layers</summary>
+  <label class="toggle"><input type="checkbox" data-key="stations" data-layers="stations,station-labels" checked> Stations</label>
+  <label class="toggle"><input type="checkbox" data-key="outlines" data-layers="outlines-fill,outlines-line" checked> Station outlines</label>
+  <label class="toggle"><input type="checkbox" data-key="entrances" data-layers="entrances" checked> Entrances</label>
+  <label class="toggle"><input type="checkbox" data-key="tracks" data-layers="tracks-existing,tracks-planned" checked> Track</label>
+  <label class="toggle"><input type="checkbox" data-key="planned-stations" id="show-planned" checked> Planned stations</label>
+  <label class="toggle"><input type="checkbox" data-key="parks" data-layers="parks-fill,parks-line" checked> Parks</label>
+  <label class="toggle"><input type="checkbox" data-key="park-entrances" data-layers="park-entrances" checked> Park entrances</label>
+  <label class="toggle"><input type="checkbox" data-key="planned-parks" id="show-planned-parks"> Planned parks</label>
+  <label class="toggle"><input type="checkbox" data-key="kindergartens" data-layers="kindergartens" checked> Kindergartens</label>
+  <label class="toggle"><input type="checkbox" data-key="schools" data-layers="schools" checked> Schools</label>
+  </details>
 
   <h2>Areas</h2>
   <select id="area-kind">
@@ -109,11 +143,11 @@
   <h2>Selected</h2>
   <div id="info"><div class="empty">Click a station, a park, a school, an entrance or an area on the map.</div></div>
 
-  <h2>Data issues</h2>
-  <div id="issues"></div>
 </aside>
 <div id="map"></div>
+</div>
 
+<script src="/static/focuses.js"></script>
 <script>
 const COLORS = { yes: '#2ba84a', limited: '#e89a00', no: '#d93a3a', unknown: '#9aa0a8' };
 const PLANNED = '#8a8f98';
@@ -294,9 +328,12 @@ map.on('load', async () => {
   renderLines();
   renderParkLegend();
   renderEducationLegend();
-  renderIssues(issues, areaIssues, parkIssues, eduIssues.concat(catchmentIssues));
+  const tag = (list, source) => list.map(i => ({ ...i, source }));
+  renderIssues([...tag(issues, 'Metro'), ...tag(areaIssues, 'Areas'), ...tag(parkIssues, 'Parks'),
+                ...tag(eduIssues, 'Kindergartens and schools'), ...tag(catchmentIssues, 'School catchments')]);
   bindToggles();
   bindAreaControls();
+  bindFocusMenu();
 
   for (const id of ['stations', 'outlines-fill']) {
     map.on('click', id, e => selectStation(e.features[0].properties.id));
@@ -341,6 +378,7 @@ map.on('load', async () => {
   // ?kindergarten=<id>, ?school=<id> or ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
+  applyFocus(q.get('focus') || 'overview');
   if (q.has('station')) selectStation(+q.get('station'), false);
   else if (q.has('entrance')) selectEntrance(+q.get('entrance'), false);
   else if (q.has('park')) selectPark(q.get('park'), false);
@@ -350,8 +388,58 @@ map.on('load', async () => {
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
+// The URL keeps the focus and the selection: ?focus=<id>&school=<id>.
+let currentFocus = null, remembered = '';
 function remember(kind, id) {
-  history.replaceState(null, '', `?${kind}=${id}`);
+  remembered = `${kind}=${id}`;
+  writeUrl();
+}
+function writeUrl() {
+  const parts = [currentFocus && currentFocus.id !== 'overview' ? 'focus=' + currentFocus.id : '', remembered].filter(Boolean);
+  history.replaceState(null, '', parts.length ? '?' + parts.join('&') : location.pathname);
+}
+
+function bindFocusMenu() {
+  const button = document.getElementById('focus-button'), list = document.getElementById('focus-list');
+  FOCUSES.forEach(f => {
+    const errors = checkFocus(f, METRICS);
+    if (errors.length) console.warn(`focus ${f.id}:`, errors.join('; '));
+    f.valid = !errors.length;
+  });
+  const item = f => `<button class="focus-item" data-focus="${esc(f.id)}"><b>${esc(f.title)}</b><br>
+    <span class="sub">${esc(f.question)}</span></button>`;
+  const shown = FOCUSES.filter(f => f.valid);
+  list.innerHTML = shown.filter(f => !f.category).map(item).join('') +
+    FOCUS_CATEGORIES.map(c => shown.filter(f => f.category === c)).filter(fs => fs.length)
+      .map(fs => `<h2>${esc(fs[0].category)}</h2>` + fs.map(item).join('')).join('');
+  const toggle = open => { list.hidden = !open; button.setAttribute('aria-expanded', open); };
+  button.onclick = () => toggle(list.hidden);
+  list.onclick = e => {
+    const b = e.target.closest('[data-focus]'); if (!b) return;
+    applyFocus(b.dataset.focus); toggle(false);
+  };
+  document.addEventListener('click', e => { if (!e.target.closest('#focus-menu')) toggle(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') toggle(false); });
+}
+
+// A focus sets the layers, the area colouring and the side panels; the
+// selection and the map view stay as they are.
+function applyFocus(id) {
+  currentFocus = FOCUSES.find(f => f.id === id && f.valid) || FOCUSES[0];
+  document.querySelectorAll('input[data-key]').forEach(cb => {
+    const on = currentFocus.layers.includes(cb.dataset.key);
+    if (cb.checked !== on) { cb.checked = on; cb.dispatchEvent(new Event('change')); }
+  });
+  if (currentFocus.areas?.metric) document.getElementById('area-metric').value = currentFocus.areas.metric;
+  setAreaKind(currentFocus.areas?.kind || '');
+  document.getElementById('issues-panel').hidden = currentFocus.panel !== 'issues';
+  document.getElementById('focus-title').textContent = currentFocus.title;
+  document.getElementById('focus-heading').textContent = currentFocus.title;
+  document.getElementById('focus-question').textContent = currentFocus.question;
+  document.querySelectorAll('.focus-item').forEach(b =>
+    b.setAttribute('aria-current', b.dataset.focus === currentFocus.id));
+  document.title = `sofia.ai — ${currentFocus.title}`;
+  writeUrl();
 }
 
 function chip(code) {
@@ -383,9 +471,18 @@ function renderEducationLegend() {
     `<span><i class="dot" style="background:${KG_COLORS.municipal};opacity:.35"></i>closed, doubtful or no classes</span>`;
 }
 
-function renderIssues(issues, areaIssues, parkIssues, eduIssues) {
+function renderIssues(all) {
+  const filter = document.getElementById('issue-source');
+  const sources = [...new Set(all.map(i => i.source))];
+  filter.innerHTML = `<option value="">All sources (${all.length})</option>` + sources.map(s =>
+    `<option value="${esc(s)}">${esc(s)} (${all.filter(i => i.source === s).length})</option>`).join('');
+  filter.onchange = () => renderIssueGroups(all.filter(i => !filter.value || i.source === filter.value));
+  renderIssueGroups(all);
+}
+
+function renderIssueGroups(issues) {
   const groups = {};
-  issues.concat(areaIssues, parkIssues, eduIssues).forEach(i => (groups[i.issue] ||= []).push(i));
+  issues.forEach(i => (groups[i.issue] ||= []).push(i));
   const box = document.getElementById('issues');
   if (!issues.length) { box.innerHTML = '<div class="empty">None.</div>'; return; }
   box.innerHTML = Object.entries(groups).map(([name, list]) =>
