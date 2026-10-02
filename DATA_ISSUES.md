@@ -3,7 +3,8 @@
 Problems found in the source data of https://urbandata.sofia.bg/, one entry
 per kind of problem. Single rows that show the problem are listed by the
 issue views in the database (`city.metro_issues`, `city.area_issues`,
-`city.park_issues`, `city.education_issues`); this
+`city.park_issues`, `city.education_issues`, `city.catchment_issues`,
+`city.transit_issues`); this
 file records what we know about each kind: where it comes from, what it
 affects, and what we did about it.
 
@@ -56,6 +57,21 @@ When you add an entry, give it the next number and keep the fields.
 | 33 | Sofiaplan's 2021 not-served method is not documented | education | flagged |
 | 34 | Sofiaplan's 2019 school reach has sites we lack | education | open |
 | 35 | Areas where Sofiaplan's not-served shares and ours disagree | education | open |
+| 36 | The school catchment list has no key to the address points | education | worked around |
+| 37 | The list repeats some streets under two names | education | open |
+| 38 | List schools missing from or renamed in the 2018 schools | education | open |
+| 39 | Some places are assigned to a school over 5 km away | education | not an error |
+| 40 | Estate blocks have one address point but many entrances | education | open |
+| 41 | The catchment list, the schools and the residents are of different years | education | open |
+| 42 | No accessibility data in the timetable | transit | flagged |
+| 43 | Trips have no direction | transit | flagged |
+| 44 | A fifth of the stops are never served | transit | flagged |
+| 45 | One stop has an id per mode | transit | worked around |
+| 46 | 63 lines have no trips | transit | flagged |
+| 47 | Metro station names differ from Sofiaplan's | transit | worked around |
+| 48 | All stop times are estimates | transit | flagged |
+| 49 | The calendar reaches two years back | transit | not an error |
+| 50 | The live feeds are single snapshots | transit | open |
 
 ## Metro
 
@@ -558,3 +574,106 @@ When you add an entry, give it the next number and keep the fields.
   Лозен, …) have no children counted, and those places are missing from
   the area shares.
 - **Handling:** shown with each figure's date.
+
+## Public transport
+
+All from the static GTFS timetable (dataset gtfs-static, published by
+Theoremus for the Center for Urban Mobility, valid 2026-09-28 ..
+2027-09-28, downloaded 2026-09-28), as loaded by `load_gtfs.py` and
+interpreted by `db/city/transit.sql`.
+
+### 42. No accessibility data in the timetable
+
+- **Status:** flagged.
+- **What:** all 29,400 trips have `wheelchair_accessible` 0 ("no
+  information"), and stops.txt has no `wheelchair_boarding` column. The
+  feed cannot say which lines run low-floor vehicles or which stops can
+  be used from a wheelchair.
+- **Handling:** we say nothing about step-free travel by bus, tram or
+  trolleybus. Step-free metro entrances come from Sofiaplan (see the
+  metro section).
+- **Check:** `transit_issues` ('no accessibility data').
+
+### 43. Trips have no direction
+
+- **Status:** flagged.
+- **What:** `direction_id` is empty on every trip. The two directions of
+  a line can only be told apart by the headsign or the shape.
+- **Handling:** frequencies are counted over both directions together:
+  "12 departures an hour" at a stop pair served both ways is about 6 each
+  way.
+- **Check:** `transit_issues` ('no trip direction').
+
+### 44. A fifth of the stops are never served
+
+- **Status:** flagged.
+- **What:** 1,149 of the 4,414 stop ids have no stop time at all. Merged
+  into stops as people see them, 671 of 3,521 stops have no trip on any
+  reference day. 186 stops are named "ВРЕМЕННА" (temporary), none of
+  them served: left over from past road works.
+- **Handling:** only served stops count for access; the others are
+  listed so a stop on the map is not taken for a working one.
+- **Check:** `transit_issues` ('stop never served', 'temporary stop').
+
+### 45. One stop has an id per mode
+
+- **Status:** worked around.
+- **What:** a pole served by buses and trolleybuses is two stops,
+  A0328 and TB0328, with the same code 0328 on the sign. 830 codes are
+  shared like this. The farthest pair is 82 m apart (МС МУСАГЕНИЦА); most
+  are within a few metres.
+- **Handling:** `transit_stops` merges them by the code. Metro stations
+  keep their stop_id, as their codes (1, 18, 303) could clash.
+- **Check:** `transit_issues` ('one stop under several ids').
+
+### 46. 63 lines have no trips
+
+- **Status:** flagged.
+- **What:** 63 of 204 routes have no trip in the feed at all: most are
+  replacement lines for road works (names with ТМ/TM, Т, Tb), seasonal
+  lines (Банкя, Врана, Витоша) and some numbered lines (1, 3, 4, 5, 7,
+  8, 10, 12, 14). Whether they run is not in the timetable.
+- **Handling:** they are kept in `transit_routes` with 0 trips and no
+  line, and counted nowhere.
+- **Check:** `transit_issues` ('line without trips').
+
+### 47. Metro station names differ from Sofiaplan's
+
+- **Status:** worked around.
+- **What:** 14 of the 50 metro stations are named differently in the
+  timetable and in Sofiaplan's station outlines: abbreviations (НДК /
+  Национален дворец на културата, ГЕН. / Генерал), extra words (Бул.
+  България, Сердика 1, ИЕЦ - Цариградско шосе), and one other name:
+  Sofiaplan's "Красно село" on Line 3 is "ЦАР БОРИС III" in the
+  timetable. "ТЕAТРАЛНА" is spelled with a Latin A.
+- **Handling:** stops are matched to station outlines by location
+  (within 300 m; all 50 match, the farthest is 44 m).
+- **Check:** `transit_issues` ('metro name differs', 'Latin letter in a
+  Cyrillic name').
+
+### 48. All stop times are estimates
+
+- **Status:** flagged.
+- **What:** every stop time has `timepoint` 0: the times are
+  approximate, not the published schedule a driver keeps to.
+- **Handling:** counts per hour are reliable; the exact minute is not.
+- **Check:** `transit_issues` ('all times are estimates').
+
+### 49. The calendar reaches two years back
+
+- **Status:** not an error.
+- **What:** the feed is valid from 2026-09-28, but `calendar_dates`
+  starts on 2024-08-12: 18,266 past dates of 2,341 services. There is no
+  calendar.txt; every service lists its dates.
+- **Handling:** only the reference days are used (`transit_days`: Tuesday
+  2026-10-06, Saturday 2026-10-10, Sunday 2026-10-11).
+- **Check:** `transit_issues` ('calendar from before the feed').
+
+### 50. The live feeds are single snapshots
+
+- **Status:** open.
+- **What:** the vehicle positions, trip updates and alerts datasets are
+  GTFS-realtime protobuf files captured once by `sync.py`. One snapshot
+  says where the vehicles were at one moment, not how punctual they are.
+- **Handling:** not loaded. Punctuality needs the feeds polled over
+  weeks.
