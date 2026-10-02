@@ -482,3 +482,75 @@ class TransitTest(unittest.TestCase):
         self.assertEqual(self.scalar("""
             SELECT count(*) FROM city.transit_routes
              WHERE trips_weekday + trips_saturday + trips_sunday > 0 AND geom IS NULL"""), 0)
+
+
+class TransitAccessTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.building_transit_access").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.building_transit_access is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_every_building_is_measured(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.building_transit_access"),
+                         self.scalar("SELECT count(*) FROM city.building_residents"))
+
+    def test_nearest_stop_is_nearest_in_metres(self):
+        # Every 50th building against all served stops.
+        self.assertEqual(self.scalar("""
+            SELECT count(*)
+              FROM city.building_transit_access a
+              JOIN city.building_residents r ON r.id = a.building_id
+             CROSS JOIN LATERAL (
+                   SELECT min(ST_Distance(s.geom::geography, r.geom::geography)) AS d
+                     FROM city.transit_stops s WHERE s.served) m
+             WHERE r.id % 50 = 0 AND abs(a.distance_m - m.d) > 1"""), 0)
+
+    def test_stops_within_400_m_agree_with_the_nearest(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_transit_access
+             WHERE (stops_400 > 0) <> (distance_m <= 400)"""), 0)
+
+    def test_a_trip_counts_once_but_every_trip_counts(self):
+        # At least the trips of the nearest stop, at most the departures of
+        # all stops within 400 m (a trip calling at two of them is one).
+        rows = self.conn.execute("""
+            WITH w AS (SELECT date + time '07:00' AS f, date + time '09:00' AS t
+                         FROM city.transit_days WHERE day = 'weekday'),
+            near AS (
+                SELECT a.building_id, a.peak_per_hour, s.id AS stop_id, s.id = a.stop_id AS nearest
+                  FROM city.building_transit_access a
+                  JOIN city.building_residents r ON r.id = a.building_id
+                  -- within 400 m to the metre, as transit_access.sql counts
+                  JOIN city.transit_stops s ON s.served AND ST_DWithin(s.geom::geography, r.geom::geography, 401)
+                   AND round(ST_Distance(s.geom::geography, r.geom::geography)::numeric) <= 400
+                 WHERE r.id % 25 = 0)
+            SELECT n.building_id, min(n.peak_per_hour) * 2 AS counted,
+                   count(DISTINCT d.trip_id) FILTER (WHERE n.nearest) AS nearest_trips,
+                   count(d.trip_id) AS all_departures
+              FROM near n CROSS JOIN w
+              LEFT JOIN city.transit_departures d
+                     ON d.stop_id = n.stop_id AND d.day = 'weekday' AND d.at >= w.f AND d.at < w.t
+             GROUP BY n.building_id""").fetchall()
+        self.assertTrue(rows)
+        for building, counted, nearest, departures in rows:
+            self.assertGreaterEqual(counted, nearest, building)
+            self.assertLessEqual(counted, departures, building)
+
+    def test_city_shares(self):
+        # 97.8 % within 400 m of a served stop and Sofiaplan's 90.9 % when
+        # written: their walk along streets is longer than our straight line.
+        row = self.conn.execute("""
+            SELECT transit_share_400, sofiaplan_transit_share_400, transit_theirs_only_share
+              FROM city.area_transit_access WHERE area_kind = 'city'""").fetchone()
+        self.assertGreater(row[0], row[1])
+        self.assertLess(row[2], 0.01)
