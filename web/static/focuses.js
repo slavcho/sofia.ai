@@ -16,14 +16,17 @@ const ALL_LAYERS = FOCUS_LAYERS.filter(k => k !== 'planned-parks');
 const FOCUSES = [
   { id: 'overview', category: null, title: 'Overview',
     question: 'Metro, parks, kindergartens and schools on one map.',
-    layers: ALL_LAYERS, areas: null },
+    layers: ALL_LAYERS, areas: null, list: 'schools', drawer: 'folded' },
   { id: 'data-issues', category: 'Technical', title: 'Data issues',
     question: 'Where are the source data missing, wrong, or in disagreement with each other?',
-    layers: ALL_LAYERS, areas: null, panel: 'issues' },
+    layers: ALL_LAYERS, areas: null, panel: 'issues',
+    list: 'issues', listScope: 'all', drawer: 'open' },
 ];
 
 // Problems with a focus, as a list of messages; empty if it can be shown.
-function checkFocus(f, metrics) {
+// list: which table the drawer shows (a key of LISTS in list.js);
+// listScope: 'view' or 'all'; drawer: 'open' or 'folded'.
+function checkFocus(f, metrics, lists) {
   const errors = [];
   if (!f.id || !f.title) errors.push('needs an id and a title');
   if (f.category != null && !FOCUS_CATEGORIES.includes(f.category)) errors.push(`unknown category ${f.category}`);
@@ -33,5 +36,8 @@ function checkFocus(f, metrics) {
     if (f.areas.metric && !metrics[f.areas.metric]) errors.push(`unknown metric ${f.areas.metric}`);
   }
   if (f.panel && f.panel !== 'issues') errors.push(`unknown panel ${f.panel}`);
+  if (f.list && !lists[f.list]) errors.push(`unknown list ${f.list}`);
+  if (f.listScope && !['view', 'all'].includes(f.listScope)) errors.push(`unknown list scope ${f.listScope}`);
+  if (f.drawer && !['open', 'folded'].includes(f.drawer)) errors.push(`unknown drawer state ${f.drawer}`);
   return errors;
 }

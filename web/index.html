@@ -37,6 +37,32 @@
   #focus-heading { margin-bottom: 4px; }
   details.section > summary { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
                               color: var(--muted); font-weight: 700; margin: 20px 0 8px; }
+  #map-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #map-col #map { height: auto; min-height: 0; }
+  #drawer { flex: none; height: 34%; min-height: 120px; display: flex; flex-direction: column;
+            background: var(--bg); border-top: 1px solid var(--border); }
+  #drawer.folded { height: auto; min-height: 0; }
+  #drawer.folded #list-body { display: none; }
+  #drawer > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 6px 12px;
+                     background: var(--panel); border-bottom: 1px solid var(--border); }
+  #drawer > header select { width: auto; margin: 0; }
+  #list-count { color: var(--muted); font-size: 12px; flex: 1; }
+  #drawer button { font: inherit; font-size: 12px; color: var(--text); background: var(--bg); cursor: pointer;
+                   border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; }
+  #list-scope { display: inline-flex; }
+  #list-scope button:first-child { border-radius: 6px 0 0 6px; }
+  #list-scope button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
+  #list-scope button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #list-body { flex: 1; overflow: auto; }
+  #list-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  #list-table th { position: sticky; top: 0; background: var(--bg); text-align: left; font-weight: 600;
+                   color: var(--muted); padding: 5px 10px; border-bottom: 1px solid var(--border);
+                   cursor: pointer; white-space: nowrap; user-select: none; }
+  #list-table td { padding: 3px 10px; border-bottom: 1px solid var(--border); }
+  #list-table th.num, #list-table td.num { text-align: right; }
+  #list-table tbody tr { cursor: pointer; }
+  #list-table tbody tr:hover { background: var(--panel); }
+  #list-table caption { padding: 12px; text-align: left; }
   #side { width: 340px; flex: none; height: 100%; overflow-y: auto;
           background: var(--panel); border-right: 1px solid var(--border); padding: 16px; }
   #map { flex: 1; height: 100%; }
@@ -76,6 +102,7 @@
     #main { flex-direction: column-reverse; }
     #side { width: 100%; height: 45%; border-right: 0; border-top: 1px solid var(--border); }
     #map { height: 55%; }
+    #map-col { height: 55%; flex: none; }
   }
 </style>
 </head>
@@ -153,10 +180,23 @@
   <div id="info"><div class="empty">Click a station, a park, a school, an entrance or an area on the map.</div></div>
 
 </aside>
-<div id="map"></div>
+<div id="map-col">
+  <div id="map"></div>
+  <section id="drawer" class="folded">
+    <header>
+      <select id="list-name" aria-label="List"></select>
+      <span id="list-count"></span>
+      <span id="list-scope"><button data-scope="view">In view</button><button data-scope="all">Whole city</button></span>
+      <button id="list-csv" title="Download the rows below, with their data date and source">CSV</button>
+      <button id="list-fold">▴</button>
+    </header>
+    <div id="list-body"><table id="list-table"></table></div>
+  </section>
+</div>
 </div>
 
 <script src="/static/focuses.js"></script>
+<script src="/static/list.js"></script>
 <script>
 const COLORS = { yes: '#2ba84a', limited: '#e89a00', no: '#d93a3a', unknown: '#9aa0a8' };
 const PLANNED = '#8a8f98';
@@ -230,7 +270,7 @@ const AREA_FILE = { district: 'regions_sofia.geojson (GIS Sofia)',
                     planning_unit: 'ge_26_sofpr_20200616 (Sofiaplan)' };
 
 let lines = {}, stations = null, entrances = null, parks = null, gates = null, kgs = null, schools = null;
-let areaKind = '', areaCache = {}, selection = null;
+let areaKind = '', areaCache = {}, selection = null, allIssues = [];
 const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
 const num = v => v == null ? '—' : Number(v).toLocaleString();
 
@@ -342,7 +382,10 @@ map.on('load', async () => {
                 ...tag(eduIssues, 'Kindergartens and schools'), ...tag(catchmentIssues, 'School catchments')]);
   bindToggles();
   bindAreaControls();
+  bindList();
   bindFocusMenu();
+  // District names for the lists; the areas load on their own otherwise.
+  getJSON('/api/areas/district').then(d => { areaCache.district ||= d; renderList(); }).catch(() => {});
   // Shortly after the last frame of a move, zoom or layer switch. ('idle'
   // can wait a long time on the base map's tiles.)
   let legendTimer = null;
@@ -415,7 +458,7 @@ function writeUrl() {
 function bindFocusMenu() {
   const button = document.getElementById('focus-button'), list = document.getElementById('focus-list');
   FOCUSES.forEach(f => {
-    const errors = checkFocus(f, METRICS);
+    const errors = checkFocus(f, METRICS, LISTS);
     if (errors.length) console.warn(`focus ${f.id}:`, errors.join('; '));
     f.valid = !errors.length;
   });
@@ -446,6 +489,8 @@ function applyFocus(id) {
   if (currentFocus.areas?.metric) document.getElementById('area-metric').value = currentFocus.areas.metric;
   setAreaKind(currentFocus.areas?.kind || '');
   document.getElementById('issues-panel').hidden = currentFocus.panel !== 'issues';
+  setList(currentFocus.list || 'schools', currentFocus.listScope || 'view');
+  foldDrawer(currentFocus.drawer !== 'open');
   document.getElementById('focus-title').textContent = currentFocus.title;
   document.getElementById('focus-heading').textContent = currentFocus.title;
   document.getElementById('focus-question').textContent = currentFocus.question;
@@ -485,6 +530,7 @@ function renderEducationLegend() {
 }
 
 function renderIssues(all) {
+  allIssues = all;
   const filter = document.getElementById('issue-source');
   const sources = [...new Set(all.map(i => i.source))];
   filter.innerHTML = `<option value="">All sources (${all.length})</option>` + sources.map(s =>
@@ -506,12 +552,15 @@ function renderIssueGroups(issues) {
     '</details>').join('');
   box.onclick = e => {
     const el = e.target.closest('.issue'); if (!el) return;
-    const i = groups[el.dataset.g][+el.dataset.n];
-    if (i.area_kind) selectArea(i.area_kind, i.area_id);
-    else if (i.park_id) selectPark(i.park_id); else if (i.park_entrance_id) selectParkEntrance(i.park_entrance_id);
-    else if (i.kindergarten_id) selectKindergarten(i.kindergarten_id); else if (i.school_id) selectSchool(i.school_id);
-    else if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
+    openIssue(groups[el.dataset.g][+el.dataset.n]);
   };
+}
+
+function openIssue(i) {
+  if (i.area_kind) selectArea(i.area_kind, i.area_id);
+  else if (i.park_id) selectPark(i.park_id); else if (i.park_entrance_id) selectParkEntrance(i.park_entrance_id);
+  else if (i.kindergarten_id) selectKindergarten(i.kindergarten_id); else if (i.school_id) selectSchool(i.school_id);
+  else if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
 }
 
 function updateLegends() {
@@ -577,6 +626,7 @@ function paintAreas() {
   document.getElementById('area-legend').innerHTML = !areaKind ? '' :
     m.colors.map((c, i) => `<span><i class="swatch" style="background:${c}"></i>${labels[i]}</span>`).join('') +
     `<span><i class="swatch" style="background:${NO_DATA}"></i>&lt; ${MIN_PEOPLE} residents</span>`;
+  if (listName === 'areas') renderList();
 }
 
 function highlight(coords) {
