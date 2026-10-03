@@ -128,7 +128,7 @@ const LISTS = {
         // Density is already a column of its own.
         ...key === 'density' ? [] : [{ label: m.label, num: true,
           value: p => p[key] == null ? null : m.pct ? Math.round(p[key] * 1000) / 10 : p[key],
-          suffix: m.pct ? '%' : '' }]];
+          suffix: m.pct ? '%' : '', plain: m.plain }]];
     },
   },
   // Follows the source filter of the data issues panel.
@@ -199,7 +199,7 @@ function renderList() {
   const cell = (col, p) => {
     const v = col.value(p);
     if (v == null || v === '') return '';
-    return esc(col.num && typeof v === 'number' ? v.toLocaleString() : v) + (col.suffix || '');
+    return esc(col.num && !col.plain && typeof v === 'number' ? v.toLocaleString() : v) + (col.suffix || '');
   };
   document.getElementById('list-table').innerHTML = empty ? `<caption class="empty">${esc(empty)}</caption>` :
     `<thead><tr>${shown.map(col => {
