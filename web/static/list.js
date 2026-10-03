@@ -116,7 +116,7 @@ const LISTS = {
   areas: {
     label: 'Areas', noun: () => ({ district: 'districts', neighbourhood: 'neighbourhoods',
                                    planning_unit: 'planning-units' })[areaKind] || 'areas',
-    empty: () => areaKind ? '' : 'This focus does not colour any areas; pick one that does from the Focus menu.',
+    empty: () => areaKind ? '' : 'This focus does not colour any areas; pick one that does from All topics.',
     rows: () => !areaKind || !areaCache[areaKind] ? [] : areaCache[areaKind].features.map(f => ({
       p: f.properties, geometry: f.geometry, open: () => selectArea(areaKind, f.properties.id) })),
     columns: () => {

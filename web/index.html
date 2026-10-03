@@ -25,14 +25,27 @@
   #bar .brand { font-weight: 700; }
   #focus-button { font: inherit; color: var(--text); background: var(--panel); cursor: pointer;
                   border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
-  #focus-list { position: absolute; top: 40px; left: 16px; width: min(560px, calc(100vw - 32px));
-                max-height: calc(100vh - 60px); overflow-y: auto; background: var(--bg);
-                border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px 12px;
-                box-shadow: 0 6px 24px rgba(0,0,0,.18); }
-  #focus-list h2 { margin-top: 12px; }
-  .focus-item { display: block; width: 100%; text-align: left; font: inherit; color: var(--text);
-                background: none; border: 0; border-radius: 6px; padding: 6px 8px; cursor: pointer; }
-  .focus-item:hover, .focus-item[aria-current="true"] { background: var(--panel); }
+  #focus-menu { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
+  #focus-button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #focus-search { flex: none; width: 240px; margin-left: auto; font: inherit; font-size: 13px; color: var(--text);
+                  background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  /* The gallery covers the map and the sidebar, under the bar. */
+  #focus-list { position: fixed; top: 44px; left: 0; right: 0; bottom: 0; overflow-y: auto;
+                background: var(--bg); padding: 20px max(16px, calc((100vw - 1200px) / 2)) 40px; }
+  #gallery-head { display: flex; align-items: center; gap: 12px; }
+  #gallery-head h1 { flex: 1; }
+  #gallery-close { font: inherit; font-size: 20px; line-height: 1; color: var(--muted); background: none;
+                   border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  #gallery-close:hover { background: var(--panel); color: var(--text); }
+  #focus-list h2 { margin-top: 24px; color: var(--cat); }
+  .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+  .focus-item { display: flex; flex-direction: column; justify-content: flex-start; width: 100%; text-align: left;
+                font: inherit; color: var(--text); cursor: pointer;
+                background: var(--panel); border: 1px solid var(--border); border-top: 3px solid var(--cat);
+                border-radius: 8px; padding: 10px 12px; }
+  .focus-item:hover, .focus-item.active { border-color: var(--cat); }
+  .focus-item[aria-current="true"] { box-shadow: inset 0 0 0 1px var(--cat); }
+  .focus-item .sub { display: block; margin-top: 4px; }
   #main { flex: 1; display: flex; min-height: 0; }
   #focus-heading { margin-bottom: 4px; }
   details.section > summary { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
@@ -114,6 +127,7 @@
     #side { width: 100%; height: 45%; border-right: 0; border-top: 1px solid var(--border); }
     #map { height: 55%; }
     #map-col { height: 55%; flex: none; }
+    #focus-search { width: 120px; }
   }
 </style>
 </head>
@@ -121,8 +135,16 @@
 <header id="bar">
   <span class="brand">sofia.ai</span>
   <div id="focus-menu">
-    <button id="focus-button" aria-haspopup="true" aria-expanded="false">Focus: <b id="focus-title">Overview</b> ▾</button>
-    <div id="focus-list" hidden></div>
+    <button id="focus-button" aria-controls="focus-list" aria-expanded="false">☰ All topics · <b id="focus-title">Overview</b></button>
+    <input id="focus-search" type="search" placeholder="Find a focus  ( / )" aria-label="Find a focus"
+           autocomplete="off" aria-controls="focus-list">
+    <div id="focus-list" hidden>
+      <div id="gallery-head">
+        <h1>What do you want to look at?</h1>
+        <button id="gallery-close" aria-label="Close">✕</button>
+      </div>
+      <div id="gallery-body"></div>
+    </div>
   </div>
 </header>
 <div id="main">
@@ -685,7 +707,7 @@ map.on('load', async () => {
   bindToggles();
   paintAreas();
   bindList();
-  bindFocusMenu();
+  const toggleGallery = bindFocusMenu();
   bindSelected();
   // District names for the lists; the areas load on their own otherwise.
   getJSON('/api/areas/district').then(d => { areaCache.district ||= d; renderList(); }).catch(() => {});
@@ -804,6 +826,8 @@ map.on('load', async () => {
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   applyFocus(q.get('focus') || 'overview');
+  // The bare site opens on the gallery; shared links go to the map.
+  if (!location.search) toggleGallery(true);
   if (q.has('station')) selectStation(+q.get('station'), false);
   else if (q.has('entrance')) selectEntrance(+q.get('entrance'), false);
   else if (q.has('park')) selectPark(q.get('park'), false);
@@ -837,27 +861,71 @@ function writeUrl() {
   history.replaceState(null, '', parts.length ? '?' + parts.join('&') : location.pathname);
 }
 
+// All the focuses as cards, one section per category, over the map. The
+// bare site opens on it, so that newcomers see what the map can answer;
+// the search box filters it, which is quicker once you know what you want.
 function bindFocusMenu() {
-  const button = document.getElementById('focus-button'), list = document.getElementById('focus-list');
+  const button = document.getElementById('focus-button'), list = document.getElementById('focus-list'),
+        body = document.getElementById('gallery-body'), search = document.getElementById('focus-search');
   FOCUSES.forEach(f => {
     const errors = checkFocus(f, METRICS, LISTS);
     if (errors.length) console.warn(`focus ${f.id}:`, errors.join('; '));
     f.valid = !errors.length;
   });
-  const item = f => `<button class="focus-item" data-focus="${esc(f.id)}"><b>${esc(f.title)}</b><br>
+  // One hue per category, spread around the colour wheel.
+  const hue = c => `--cat: hsl(${FOCUS_CATEGORIES.indexOf(c) * 360 / FOCUS_CATEGORIES.length} 55% 45%)`;
+  const item = f => `<button class="focus-item" data-focus="${esc(f.id)}"><b>${esc(f.title)}</b>
     <span class="sub">${esc(f.question)}</span></button>`;
   const shown = FOCUSES.filter(f => f.valid);
-  list.innerHTML = shown.filter(f => !f.category).map(item).join('') +
-    FOCUS_CATEGORIES.map(c => shown.filter(f => f.category === c)).filter(fs => fs.length)
-      .map(fs => `<h2>${esc(fs[0].category)}</h2>` + fs.map(item).join('')).join('');
-  const toggle = open => { list.hidden = !open; button.setAttribute('aria-expanded', open); };
-  button.onclick = () => toggle(list.hidden);
-  list.onclick = e => {
-    const b = e.target.closest('[data-focus]'); if (!b) return;
-    applyFocus(b.dataset.focus); toggle(false);
+  body.innerHTML = [null, ...FOCUS_CATEGORIES].map(c => shown.filter(f => f.category === c)).filter(fs => fs.length)
+    .map(fs => `<section style="${fs[0].category ? hue(fs[0].category) : '--cat: var(--accent)'}">
+      ${fs[0].category ? `<h2>${esc(fs[0].category)}</h2>` : ''}
+      <div class="gallery-grid">${fs.map(item).join('')}</div></section>`).join('') +
+    '<div class="empty" id="gallery-none" hidden>No focus matches.</div>';
+
+  let active = -1;
+  const visible = () => [...body.querySelectorAll('.focus-item:not([hidden])')];
+  const setActive = i => {
+    const all = visible();
+    body.querySelectorAll('.focus-item.active').forEach(b => b.classList.remove('active'));
+    if (!all.length) return active = -1;
+    active = (i + all.length) % all.length;
+    all[active].classList.add('active');
+    all[active].scrollIntoView({ block: 'nearest' });
   };
-  document.addEventListener('click', e => { if (!e.target.closest('#focus-menu')) toggle(false); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') toggle(false); });
+  const toggle = open => {
+    list.hidden = !open; button.setAttribute('aria-expanded', open);
+    if (open) body.querySelectorAll('.focus-item').forEach(b =>
+      b.setAttribute('aria-current', b.dataset.focus === currentFocus?.id));
+    else { search.value = ''; filter(); }
+  };
+  const filter = () => {
+    const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+    shown.forEach(f => {
+      body.querySelector(`[data-focus="${CSS.escape(f.id)}"]`).hidden = !words.every(w =>
+        `${f.title} ${f.question} ${f.category || ''}`.toLowerCase().includes(w));
+    });
+    body.querySelectorAll('section').forEach(s => s.hidden = !s.querySelector('.focus-item:not([hidden])'));
+    document.getElementById('gallery-none').hidden = visible().length > 0;
+    setActive(words.length ? 0 : -1);
+  };
+  const choose = id => { toggle(false); search.blur(); applyFocus(id); };
+  button.onclick = () => toggle(list.hidden);
+  document.getElementById('gallery-close').onclick = () => toggle(false);
+  search.oninput = () => { if (list.hidden) toggle(true); filter(); };
+  search.onkeydown = e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setActive(active + (e.key === 'ArrowDown' ? 1 : -1)); }
+    else if (e.key === 'Enter' && visible()[active]) choose(visible()[active].dataset.focus);
+  };
+  list.onclick = e => {
+    const b = e.target.closest('[data-focus]'); if (b) choose(b.dataset.focus);
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !list.hidden) { toggle(false); search.blur(); }
+    const typing = e.target.closest('input, select, textarea');
+    if (!typing && (e.key === '/' || (e.key === 'k' && (e.ctrlKey || e.metaKey)))) { e.preventDefault(); search.focus(); }
+  });
+  return toggle;
 }
 
 // A focus sets the layers, the area colouring and the side panels; the
