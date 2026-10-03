@@ -251,6 +251,7 @@ def schools():
                        'funding_code', s.funding_code, 'class_count', s.class_count,
                        'note', s.note, 'address', s.address, 'district_code', s.district_code,
                        'details_url', s.details_url,
+                       'property', p.category,
                        -- the city's catchment (2026); children NULL where
                        -- the 2019 residents do not reach (DATA_ISSUES #41)
                        'catchment_addresses', c.addresses,
@@ -263,6 +264,7 @@ def schools():
           FROM schools s
           LEFT JOIN catchment_schools c ON c.school_id = s.id
           LEFT JOIN catchment_school_children k ON k.list_id = c.list_id
+          LEFT JOIN school_property p ON p.school_id = s.id
          ORDER BY s.id
     """))
 
@@ -647,7 +649,9 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'median_built_year', n.median_built_year,
                        'residents_2019_vs_census', n.residents_2019_vs_census,
                        'residential_mean_floors', b.residential_mean_floors,
-                       'floor_area_per_resident', round(b.floor_area_m2 / nullif(a.population, 0)),
+                       'floor_area_per_resident', round(b.floor_area_m2 / nullif(a.population, 0)))::jsonb
+                   -- a function takes at most 100 arguments, so the rest is a second object
+                   || jsonb_build_object(
                        'lights_per_km2', round(l.street_lights / nullif(a.area_km2, 0)),
                        'light_led_share', l.led_share, 'light_poor_share', l.poor_share,
                        'light_not_working_share', l.not_working_share,
@@ -656,7 +660,9 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'playground_share_300', y.playground_share_300,
                        'children_playground_share_300', y.children_playground_share_300,
                        'children_per_playground', y.children_per_playground,
-                       'market_share_1000', y.market_share_1000)) AS feature
+                       'market_share_1000', y.market_share_1000,
+                       'tent_camp_m2_per_resident', round(coalesce(tc.area_m2, 0) / nullif(a.population, 0), 2)))
+                   AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
@@ -680,6 +686,8 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                  ON l.area_kind = %(kind)s AND l.area_id = a.{a['key']}::text
           LEFT JOIN area_amenity_access y
                  ON y.area_kind = %(kind)s AND y.area_id = a.{a['key']}::text
+          LEFT JOIN area_tent_camps tc
+                 ON tc.area_kind = %(kind)s AND tc.area_id = a.{a['key']}::text
           LEFT JOIN (SELECT area_id,
                             round(sum(area_ha) FILTER (WHERE zone_group IN ('residential', 'central', 'mixed'))
                                   / sum(area_ha), 4) AS residential_share,
@@ -740,6 +748,8 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                   WHERE l.area_kind = %(kind)s AND l.area_id = a.{a['key']}::text),
                     'amenities', (SELECT row_to_json(y) FROM area_amenity_access y
                                    WHERE y.area_kind = %(kind)s AND y.area_id = a.{a['key']}::text),
+                    'tent_camps', (SELECT row_to_json(tc) FROM area_tent_camps tc
+                                    WHERE tc.area_kind = %(kind)s AND tc.area_id = a.{a['key']}::text),
                     'indicators', (SELECT json_agg(json_build_object(
                                         'id', i.id, 'label', i.label, 'unit', i.unit, 'theme', i.theme,
                                         'data_as_of', i.data_as_of, 'breakdown', v.breakdown,
@@ -900,6 +910,68 @@ def markets():
                        'data_as_of', m.data_as_of,
                        'source', m.source_dataset || ' #' || m.source_fid)) AS feature
           FROM markets m LEFT JOIN districts d ON d.code = m.district_code
+    """))
+
+
+# Sites set aside for tent camps (sites.sql).
+@app.get("/api/tent-camps")
+def tent_camps():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', t.id,
+                   'geometry', ST_AsGeoJSON(t.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', t.id, 'name', t.name, 'function', t.function, 'area_m2', t.area_m2,
+                       'district', d.name, 'data_as_of', t.data_as_of,
+                       'source', t.source_dataset || ' #' || t.source_fid)) AS feature
+          FROM tent_camp_sites t LEFT JOIN districts d ON d.code = t.district_code
+    """))
+
+
+# Mining concessions, granted and terminated (sites.sql).
+@app.get("/api/concessions")
+def concessions():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', row_number() OVER (ORDER BY c.id),
+                   'geometry', ST_AsGeoJSON(c.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', c.id, 'status', c.status, 'deposit', c.deposit, 'resource', c.resource,
+                       'resource_group', c.resource_group, 'concessionaire', c.concessionaire,
+                       'decision', c.decision, 'contract_date', c.contract_date,
+                       'in_force_date', c.in_force_date, 'term', c.term, 'register_no', c.register_no,
+                       'note', c.note, 'area_m2', c.area_m2, 'data_as_of', c.data_as_of,
+                       'source', c.source_dataset || ' #' || c.source_fid)) AS feature
+          FROM concessions c
+    """))
+
+
+# Land taken by the new metro extensions (sites.sql).
+@app.get("/api/metro-projects")
+def metro_projects():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', m.id,
+                   'geometry', ST_AsGeoJSON(m.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', m.id, 'project', m.project, 'approval', m.approval, 'area_m2', m.area_m2,
+                       'district', d.name, 'data_as_of', m.data_as_of,
+                       'source', m.source_dataset || ' #' || m.source_fid)) AS feature
+          FROM metro_project_areas m LEFT JOIN districts d ON d.code = m.district_code
+    """))
+
+
+# Construction boundaries of Sofia city and the villages (sites.sql).
+@app.get("/api/settlement-boundaries")
+def settlement_boundaries():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature',
+                   'geometry', ST_AsGeoJSON(ST_SimplifyPreserveTopology(s.geom, 0.00005), 5)::json,
+                   'properties', json_build_object(
+                       'id', s.id, 'kind', s.kind, 'ekatte', s.ekatte, 'area_ha', s.area_ha,
+                       'data_as_of', s.data_as_of)) AS feature
+          FROM settlement_boundaries s
     """))
 
 

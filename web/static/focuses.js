@@ -11,7 +11,7 @@ const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-st
                       'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools',
                       'transit-stops', 'transit-routes', 'buildings',
                       'census-tracts', 'population-grid', 'polling-places', 'rectifier-stations', 'master-plan',
-                      'playgrounds', 'markets'];
+                      'playgrounds', 'markets', 'tent-camps', 'metro-projects', 'concessions', 'settlements'];
 const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 
 // Planned parks stay off: they are master plan zones, much of it forest.
@@ -20,7 +20,8 @@ const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 // polling places cover the whole map, so they come with their own focus.
 const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'buildings',
                                               'census-tracts', 'population-grid', 'polling-places',
-                                              'rectifier-stations', 'master-plan', 'playgrounds', 'markets'].includes(k));
+                                              'rectifier-stations', 'master-plan', 'playgrounds', 'markets',
+                                              'tent-camps', 'metro-projects', 'concessions', 'settlements'].includes(k));
 
 const FOCUSES = [
   { id: 'overview', category: null, title: 'Overview',
@@ -255,6 +256,19 @@ const FOCUSES = [
     question: 'Who lives within 1 km of a municipal market?',
     layers: ['markets'], areas: { kind: 'neighbourhood', metric: 'market_share_1000' },
     list: 'areas', drawer: 'open' },
+  { id: 'tent-camps', category: 'Planning', title: 'Tent camp sites',
+    question: 'How much open land is set aside for tent camps, for each resident?',
+    layers: ['tent-camps'], areas: { kind: 'district', metric: 'tent_camp_m2_per_resident' },
+    list: 'areas', drawer: 'open' },
+  { id: 'metro-extensions', category: 'Transport', title: 'Metro extensions',
+    question: 'Which land do the new metro lines to Slatina and to Vitosha take?',
+    layers: ['metro-projects', 'stations', 'tracks', 'planned-stations'], areas: null, list: 'areas', drawer: 'folded' },
+  { id: 'concessions', category: 'Environment', title: 'Mining concessions',
+    question: 'Where are sand, gravel and stone mined under concession?',
+    layers: ['concessions', 'settlements'], areas: null, list: 'areas', drawer: 'folded' },
+  { id: 'construction-boundaries', category: 'Planning', title: 'Construction boundaries',
+    question: 'Where may Sofia and the villages around it build?',
+    layers: ['settlements'], areas: null, list: 'areas', drawer: 'folded' },
   { id: 'data-issues', category: 'Technical', title: 'Data issues',
     question: 'Where are the source data missing, wrong, or in disagreement with each other?',
     layers: ALL_LAYERS, areas: null, panel: 'issues',

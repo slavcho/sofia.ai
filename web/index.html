@@ -160,6 +160,10 @@
   <label class="toggle"><input type="checkbox" data-key="rectifier-stations" data-layers="rectifier-stations"> Rectifier stations (trams, trolleybuses)</label>
   <label class="toggle"><input type="checkbox" data-key="playgrounds" data-layers="playgrounds"> Playgrounds</label>
   <label class="toggle"><input type="checkbox" data-key="markets" data-layers="markets"> Markets</label>
+  <label class="toggle"><input type="checkbox" data-key="tent-camps" data-layers="tent-camps-fill,tent-camps-line"> Tent camp sites</label>
+  <label class="toggle"><input type="checkbox" data-key="metro-projects" data-layers="metro-projects-fill,metro-projects-line"> Metro extension land</label>
+  <label class="toggle"><input type="checkbox" data-key="concessions" data-layers="concessions-fill,concessions-line,concessions-terminated-line"> Mining concessions</label>
+  <label class="toggle"><input type="checkbox" data-key="settlements" data-layers="settlements-line"> Construction boundaries</label>
   </details>
 
   <!-- Each legend shows only while one of its layers is drawn on screen. -->
@@ -427,6 +431,7 @@ const METRICS = {
   children_playground_share_300: { label: 'Playgrounds: children 0–14 within 300 m', breaks: PCT, colors: GREEN, pct: true },
   children_per_playground: { label: 'Children 0–14 per playground', breaks: [40, 80, 150, 250], colors: ORANGE },
   market_share_1000:  { label: 'Markets: residents within 1 km', breaks: PCT, colors: GREEN, pct: true },
+  tent_camp_m2_per_resident: { label: 'Tent camp land per resident, m² (2021)', breaks: [0.5, 1, 2, 5], colors: GREEN },
   dkc_unserved_pct:   { label: 'Residents with no polyclinic (DKC) on foot, % (Sofiaplan)', indicator: 'dkc_unserved_pct',
                         breaks: [1, 10, 30, 60], colors: ORANGE },
 };
@@ -446,7 +451,9 @@ let transitStops = null, transitRoutes = null, transitLoading = null;
 // they are shown (loadSmall), each into the source of the same name.
 const SMALL = { 'census-tracts': '/api/census-tracts', 'population-grid': '/api/population-grid',
                 'polling-places': '/api/polling-sections', 'rectifier-stations': '/api/rectifier-stations',
-                'playgrounds': '/api/playgrounds', 'markets': '/api/markets' };
+                'playgrounds': '/api/playgrounds', 'markets': '/api/markets', 'tent-camps': '/api/tent-camps',
+                'metro-projects': '/api/metro-projects', 'concessions': '/api/concessions',
+                'settlements': '/api/settlement-boundaries' };
 const smallData = {}, smallLoading = {};
 const TRACT_BREAKS = [0.1, 0.15, 0.2, 0.25];
 const GRID_BREAKS = [100, 1000, 3000, 6000, 10000], GRID_COLORS = ['#fff5eb', ...ORANGE];
@@ -513,6 +520,25 @@ map.on('load', async () => {
   map.addLayer({ id: 'master-plan-long-term', type: 'line', source: 'master-plan', 'source-layer': 'zones',
     minzoom: 12, filter: ['==', ['get', 'plan'], 'long-term'], layout: { visibility: 'none' },
     paint: { 'line-color': zoneColor, 'line-width': 2.5, 'line-dasharray': [2, 1] } });
+  // Terminated concessions are faded, with a dashed outline.
+  map.addLayer({ id: 'settlements-line', type: 'line', source: 'settlements', layout: { visibility: 'none' },
+    paint: { 'line-color': ['case', ['==', ['get', 'kind'], 'Sofia city'], '#222', '#555'],
+             'line-width': ['case', ['==', ['get', 'kind'], 'Sofia city'], 2.5, 1.5], 'line-dasharray': [3, 2] } });
+  map.addLayer({ id: 'concessions-fill', type: 'fill', source: 'concessions', layout: { visibility: 'none' },
+    paint: { 'fill-color': '#8c510a', 'fill-opacity': ['case', ['==', ['get', 'status'], 'granted'], 0.45, 0.15] } });
+  map.addLayer({ id: 'concessions-line', type: 'line', source: 'concessions', layout: { visibility: 'none' },
+    filter: ['==', ['get', 'status'], 'granted'], paint: { 'line-color': '#543005', 'line-width': 1.5 } });
+  map.addLayer({ id: 'concessions-terminated-line', type: 'line', source: 'concessions', layout: { visibility: 'none' },
+    filter: ['==', ['get', 'status'], 'terminated'],
+    paint: { 'line-color': '#543005', 'line-width': 1.5, 'line-dasharray': [2, 2] } });
+  map.addLayer({ id: 'tent-camps-fill', type: 'fill', source: 'tent-camps', layout: { visibility: 'none' },
+    paint: { 'fill-color': '#ff7f00', 'fill-opacity': 0.4 } });
+  map.addLayer({ id: 'tent-camps-line', type: 'line', source: 'tent-camps', layout: { visibility: 'none' },
+    paint: { 'line-color': '#b35806', 'line-width': 1.5 } });
+  map.addLayer({ id: 'metro-projects-fill', type: 'fill', source: 'metro-projects', layout: { visibility: 'none' },
+    paint: { 'fill-color': '#7b3294', 'fill-opacity': 0.45 } });
+  map.addLayer({ id: 'metro-projects-line', type: 'line', source: 'metro-projects', layout: { visibility: 'none' },
+    paint: { 'line-color': '#40004b', 'line-width': 1.5 } });
   map.addLayer({ id: 'census-tracts-fill', type: 'fill', source: 'census-tracts', layout: { visibility: 'none' },
     paint: { 'fill-color': ['case', ['==', ['get', 'share_65_plus'], null], NO_DATA,
                             ['step', ['get', 'share_65_plus'], ...PURPLE.flatMap((c, i) => i ? [TRACT_BREAKS[i - 1], c] : [c])]],
@@ -724,17 +750,31 @@ map.on('load', async () => {
     if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'markets'] }).length) return;
     selectPlayground(e.features[0].properties.id);
   });
+  // The sites: smallest first, each yields to the points, the buildings and the ones before it.
+  const SITES = [['metro-projects-fill', f => selectMetroProject(f.properties.id)],
+                 ['tent-camps-fill', f => selectTentCamp(f.properties.id)],
+                 ['concessions-fill', f => selectConcession(f.properties.id)]];
+  const SITE_FILLS = SITES.map(([id]) => id);
+  SITES.forEach(([id, open], i) => {
+    map.on('click', id, e => {
+      if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'buildings-fill', ...SITE_FILLS.slice(0, i)] }).length) return;
+      open(e.features[0]);
+    });
+    map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
+  });
   map.on('click', 'census-tracts-fill', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill'] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', ...SITE_FILLS] }).length) return;
     selectCensusTract(e.features[0].properties.id);
   });
   map.on('click', 'master-plan-fill', e => {
     if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill',
-                                                     'population-grid-fill'] }).length) return;
+                                                     'population-grid-fill', ...SITE_FILLS] }).length) return;
     selectMasterPlanZone(e.features[0].id);
   });
   map.on('click', 'population-grid-fill', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill'] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill',
+                                                     ...SITE_FILLS] }).length) return;
     selectGridCell(e.features[0].properties.id);
   });
   for (const id of ['polling-places', 'rectifier-stations', 'census-tracts-fill', 'population-grid-fill',
@@ -750,7 +790,7 @@ map.on('load', async () => {
   map.on('mouseleave', 'buildings-fill', () => map.getCanvas().style.cursor = '');
   map.on('click', 'areas-fill', e => {
     if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill',
-                                                     'population-grid-fill', 'master-plan-fill'] }).length) return;
+                                                     'population-grid-fill', 'master-plan-fill', ...SITE_FILLS] }).length) return;
     selectArea(areaKind, e.features[0].properties.id);
   });
 
@@ -758,7 +798,8 @@ map.on('load', async () => {
   // ?kindergarten=<id>, ?school=<id>, ?transit_stop=<id>,
   // ?transit_route=<id>, ?building=<id>, ?polling_section=<id>,
   // ?census_tract=<id>, ?grid_cell=<id>, ?rectifier_station=<id>,
-  // ?master_plan_zone=<id>, ?playground=<id>, ?market=<id>
+  // ?master_plan_zone=<id>, ?playground=<id>, ?market=<id>,
+  // ?tent_camp=<id>, ?metro_project=<id>, ?concession=<id>
   // or ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
@@ -779,6 +820,9 @@ map.on('load', async () => {
   else if (q.has('master_plan_zone')) selectMasterPlanZone(+q.get('master_plan_zone'), false);
   else if (q.has('playground')) selectPlayground(+q.get('playground'), false);
   else if (q.has('market')) selectMarket(+q.get('market'), false);
+  else if (q.has('tent_camp')) selectTentCamp(+q.get('tent_camp'), false);
+  else if (q.has('metro_project')) selectMetroProject(+q.get('metro_project'), false);
+  else if (q.has('concession')) selectConcession(q.get('concession'), false);
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
@@ -1051,6 +1095,67 @@ async function selectMarket(id, animate) {
       ${p.website ? `<dt>Website</dt><dd><a href="${esc(p.website)}" target="_blank" rel="noopener">${esc(p.website)}</a></dd>` : ''}
       ${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}
       <dt>District</dt><dd>${esc(p.district || '—')}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)} (published)</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
+}
+
+// Tent camp sites, metro extension land and concessions: one polygon,
+// outlined like a master plan zone.
+async function selectSite(key, kind, id, animate) {
+  const fc = await showLayer(key);
+  const f = fc.features.find(f => f.properties.id === id); if (!f) return null;
+  select(kind, id);
+  map.getSource('polling-area').setData(f);
+  map.fitBounds(bboxOf(f.geometry), { padding: 60, maxZoom: 16, animate: animate !== false });
+  return f.properties;
+}
+
+const TENT_FUNCTION = { park: 'a park', 'sports facility': 'a sports ground', school: 'a school yard' };
+async function selectTentCamp(id, animate) {
+  const p = await selectSite('tent-camps', 'tent_camp', id, animate); if (!p) return;
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.name || 'Tent camp site')}</h3>
+    <div>Land set aside for a tent camp${p.function ? ' in ' + TENT_FUNCTION[p.function] : ''}. The data does not
+      say what for; most likely for people left homeless by a disaster.</div>
+    <dl>
+      <dt>Area</dt><dd>${num(p.area_m2)} m² <span class="sub">${num(Math.round(p.area_m2 / 1e3) / 10)} ha</span></dd>
+      <dt>District</dt><dd>${esc(p.district || '—')}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
+}
+
+async function selectMetroProject(id, animate) {
+  const p = await selectSite('metro-projects', 'metro_project', id, animate); if (!p) return;
+  document.getElementById('info').innerHTML = `
+    <h3>Metro extension: ${esc(p.project)}</h3>
+    <div>Land taken by the project${p.project === 'line to Slatina' ? ', under construction'
+      : ', waiting for its detailed plan to be approved'}.</div>
+    <dl>
+      <dt>Approval</dt><dd>${esc(p.approval)}</dd>
+      <dt>Area</dt><dd>${num(p.area_m2)} m²</dd>
+      <dt>District</dt><dd>${esc(p.district || '—')}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
+}
+
+async function selectConcession(id, animate) {
+  const p = await selectSite('concessions', 'concession', id, animate); if (!p) return;
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.deposit || 'Concession')}</h3>
+    <div>${p.status === 'granted' ? 'Concession' : 'Terminated concession'} for the extraction of
+      ${esc((p.resource || '—').toLowerCase())}.</div>
+    <dl>
+      <dt>Concessionaire</dt><dd>${esc(p.concessionaire || '—')}</dd>
+      <dt>Decision</dt><dd>${esc(p.decision || '—')}</dd>
+      ${p.contract_date ? `<dt>Contract</dt><dd>${esc(p.contract_date)}, in force ${esc(p.in_force_date || '—')}</dd>` : ''}
+      ${p.term ? `<dt>Term</dt><dd>${esc(p.term)}</dd>` : ''}
+      ${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}
+      <dt>Group</dt><dd>${esc(p.resource_group || '—')}</dd>
+      <dt>Register</dt><dd>${esc(p.register_no || '—')}</dd>
+      <dt>Area</dt><dd>${num(Math.round(p.area_m2 / 1e4))} ha</dd>
       <dt>Data as of</dt><dd>${esc(p.data_as_of)} (published)</dd>
       <dt>Source</dt><dd>${esc(p.source)}</dd>
     </dl>`;
@@ -1418,6 +1523,9 @@ async function selectArea(kind, id, animate) {
     <div class="sub">Straight line to an existing playground in the municipal register, or to a municipal
       market (both published 2026); residents 2019.</div>`)(a.amenities)
       : '<div class="empty">No residents in the 2019 building data.</div>'}
+    ${a.tent_camps ? `<div class="sub" style="margin-top:6px">Tent camp sites (2021): ${num(a.tent_camps.sites)},
+      ${num(Math.round(a.tent_camps.area_m2 / 1e3) / 10)} ha${a.population ? `, ${num(Math.round(a.tent_camps.area_m2
+      / a.population * 10) / 10)} m² per resident` : ''}.</div>` : ''}
     <h4>Master plan 2009</h4>
     ${a.master_plan ? (m => { const total = m.reduce((t, g) => t + +g.area_ha, 0); return `<table class="access">
       ${m.filter(g => g.area_ha / total >= 0.01).map(g => `<tr><td><i class="swatch" style="background:${ZONE_COLORS[g.group]}"></i>
@@ -1643,6 +1751,7 @@ function selectSchool(id, animate) {
       <dt>Catchment</dt><dd id="school-catchment" class="sub">loading…</dd>
       <dt>Admin code</dt><dd>${esc(p.admin_code ?? '—')}</dd>
       <dt>Funding</dt><dd>${esc(p.funding)} <span class="sub">(code ${esc(p.funding_code ?? '—')})</span></dd>
+      ${p.property ? `<dt>Land</dt><dd>${esc(p.property)} <span class="sub">(Sofiaplan, 2018)</span></dd>` : ''}
       ${p.details_url ? `<dt>Details</dt><dd><a href="${esc(p.details_url)}" target="_blank" rel="noopener">${esc(p.details_url)}</a></dd>` : ''}
       <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
       <dt>Source</dt><dd>${esc(p.source)}</dd>
