@@ -1626,3 +1626,31 @@ SELECT area_kind, area_id,
   FROM levels
  WHERE area_id IS NOT NULL
  GROUP BY area_kind, area_id;
+
+-- ------------------------------------------------------- master plan
+--
+-- The zones of the 2009 master plan (ОУП), and the long-term zones it
+-- leaves for development after its horizon. Filled by masterplan.sql.
+CREATE TABLE IF NOT EXISTS master_plan_zones (
+    id               integer PRIMARY KEY,       -- object_id; long-term zones get 100000 +
+    plan             text NOT NULL CHECK (plan IN ('2009', 'long-term')),
+    code             text NOT NULL,             -- new_end as given, e.g. Жк, Смф2*, ЖМ1д
+    name             text NOT NULL,             -- type_, without the long-term "03.ЖМ1д - " prefix
+    zone_group       text NOT NULL,             -- residential, mixed, green... (masterplan.sql)
+    special_rules    boolean NOT NULL,          -- code ends in *: specific rules and norms
+    area_ha          numeric NOT NULL,
+    geom             geometry(MultiPolygon, 4326) NOT NULL,
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS master_plan_zones_geom_idx ON master_plan_zones USING gist (geom);
+
+-- Land of each group of zones in each area, in hectares.
+CREATE TABLE IF NOT EXISTS area_master_plan (
+    area_kind        text NOT NULL,
+    area_id          text NOT NULL,
+    zone_group       text NOT NULL,
+    area_ha          numeric NOT NULL,
+    PRIMARY KEY (area_kind, area_id, zone_group)
+);

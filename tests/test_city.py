@@ -970,3 +970,42 @@ class LightingTest(unittest.TestCase):
             self.scalar("SELECT count(*) FROM city.street_lights WHERE district_code IS NOT NULL"))
         self.assertGreater(self.scalar("""
             SELECT sum(street_lights) FROM city.area_lighting WHERE area_kind = 'planning_unit'"""), 95000)
+
+
+class MasterPlanTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.master_plan_zones").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.master_plan_zones is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_all_zones_loaded(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.master_plan_zones WHERE plan = '2009'"), 12306)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.master_plan_zones WHERE plan = 'long-term'"), 413)
+
+    def test_only_special_terrains_left_ungrouped(self):
+        self.assertEqual(self.scalar("""
+            SELECT string_agg(DISTINCT rtrim(code, '*'), ',' ORDER BY rtrim(code, '*'))
+              FROM city.master_plan_zones WHERE zone_group = 'special'"""), 'Топ,Тсп')
+
+    def test_long_term_names_without_prefix(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.master_plan_zones WHERE name ~ '^\\d' OR name = ''"""), 0)
+
+    def test_zones_cover_each_district(self):
+        # The streets are left out of the zones: they take 10-16 % of the
+        # central districts and 1-3 % of the outer ones. Zones do not overlap.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.districts d
+              JOIN (SELECT area_id, sum(area_ha) AS ha FROM city.area_master_plan
+                     WHERE area_kind = 'district' GROUP BY 1) m ON m.area_id = d.code
+             WHERE m.ha * 1e4 NOT BETWEEN 0.8 * ST_Area(d.geom::geography) AND 1.005 * ST_Area(d.geom::geography)"""), 0)
