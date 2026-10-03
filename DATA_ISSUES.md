@@ -1166,3 +1166,126 @@ interpreted by `db/city/transit.sql`.
   has 553 points with one code, 2OST1, and no explanation.
 - **Handling:** none of it is in `city`; ask the municipality whether
   a full network survey exists.
+
+## Master plan
+
+### 91. Streets are not zoned
+
+- **Status:** noted.
+- **What:** the 2009 zones stop at the street lines; the streets
+  themselves are gaps in the layer.
+- **Handling:** the zone shares of an area are taken from the zoned
+  land only, so streets do not count as an unknown zone.
+
+### 92. The long-term zone names do not match their codes
+
+- **Status:** noted.
+- **What:** in the 413 long-term zones the letter М means low-rise
+  (ЖМ1д, ЖМ2д, ЖМ3д are "нискоетажно застрояване"), but the 32 ЖМд
+  zones are named "високоетажно застрояване" (high-rise). Codes are
+  partly upper case (СМФ2д, СА2д) where the 2009 plan writes Смф, Са.
+- **Handling:** the zone group comes from the code, ignoring case; the
+  name is shown as given.
+
+### 93. What the * after a zone code means is not stated
+
+- **Status:** noted.
+- **What:** 364 of the 12,306 zones of 2009 (and 1 long-term zone) end
+  their code with *. In the master plan text this marks zones with
+  their own rules, but the data does not say which rules.
+- **Handling:** kept as `special_rules` and shown on the zone card.
+
+## Playgrounds and markets
+
+### 94. 12 playgrounds are marked hidden
+
+- **Status:** handled.
+- **What:** 12 rows have `new_label` "не се показват на картата" (not
+  shown on the map) and a repair as the measure; no reason is given.
+- **Handling:** left out. The 56 planned playgrounds are loaded but do
+  not count towards access.
+
+### 95. Playground areas such as "200/ 150"
+
+- **Status:** handled.
+- **What:** 16 playgrounds give two or more areas in `new_plost`,
+  perhaps for separate parts or for the age groups.
+- **Handling:** `area_m2` is NULL; the text is kept in `area_source`.
+
+### 96. The playground and market files have no date
+
+- **Status:** noted.
+- **What:** neither file says when it was made; the portal shows when
+  they were published (2026).
+- **Handling:** `data_as_of` is the publication date.
+
+### 97. District names in the playground and market files
+
+- **Status:** handled.
+- **What:** the playgrounds write "Бнакя" once, and some districts in
+  lower case ("красно село", "Нови искър", "Овча Купел"); the markets
+  write the districts in upper case.
+- **Handling:** the district comes from the location; the name as given
+  is kept in `source_district`.
+
+### 98. The markets name their contact people
+
+- **Status:** not loaded.
+- **What:** the market file has e-mail addresses and phones of named
+  people.
+- **Handling:** those fields are not loaded.
+
+## Tent camps, concessions, metro land and settlements
+
+### 99. One settlement boundary has no geometry, and none has a name
+
+- **Status:** handled.
+- **What:** settlement 23 has no geometry. The settlements carry no
+  name or EKATTE code.
+- **Handling:** settlement 23 is skipped. The EKATTE code is taken from
+  the census tracts the boundary covers (51 of 69 found); the rest have
+  none.
+
+### 100. Settlement boundaries overlap Sofia's
+
+- **Status:** noted.
+- **What:** some village boundaries (2019) overlap the city's
+  construction boundary (2009) by up to 157 ha.
+- **Handling:** both are drawn as given.
+
+### 101. The purpose of the tent camp sites is not stated
+
+- **Status:** noted.
+- **What:** the file lists 113 sites and their kind of land (park,
+  sports ground, school), but not what the camps are for; presumably
+  for people left homeless by an earthquake. 47 sites have no kind.
+  One district is written "Витоща".
+- **Handling:** loaded as given; the kind is NULL where missing, the
+  district comes from the location.
+
+### 102. The concessions are undated and the two files differ
+
+- **Status:** noted.
+- **What:** the granted and terminated concessions come in two files
+  with different field names and no date of their own. The brown coal
+  concession covers 13,921 ha, far more than the others (the next is
+  908 ha).
+- **Handling:** both files go into `concessions` with a `status`;
+  `data_as_of` is the publication date.
+
+### 103. School numbers that do not match the school's name
+
+- **Status:** handled.
+- **What:** `object_nom` gives 7 for "78 СОУ" and 120 for another
+  numbered school, and nothing for two evening schools.
+- **Handling:** the number at the start of the name is used, else
+  `object_nom`. **Check:** the test
+  `test_school_number_agrees_with_its_name`.
+
+### 104. The school property list has names only
+
+- **Status:** handled.
+- **What:** the 2018 list of who holds the schools' land names the
+  schools but gives no code or location.
+- **Handling:** matched by number, else by name similarity; all 11
+  match.
