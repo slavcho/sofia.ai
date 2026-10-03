@@ -10,7 +10,8 @@ const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Health', 'P
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
                       'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools',
                       'transit-stops', 'transit-routes', 'buildings',
-                      'census-tracts', 'population-grid', 'polling-places', 'rectifier-stations', 'master-plan'];
+                      'census-tracts', 'population-grid', 'polling-places', 'rectifier-stations', 'master-plan',
+                      'playgrounds', 'markets'];
 const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 
 // Planned parks stay off: they are master plan zones, much of it forest.
@@ -19,7 +20,7 @@ const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 // polling places cover the whole map, so they come with their own focus.
 const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'buildings',
                                               'census-tracts', 'population-grid', 'polling-places',
-                                              'rectifier-stations', 'master-plan'].includes(k));
+                                              'rectifier-stations', 'master-plan', 'playgrounds', 'markets'].includes(k));
 
 const FOCUSES = [
   { id: 'overview', category: null, title: 'Overview',
@@ -242,6 +243,18 @@ const FOCUSES = [
   { id: 'rectifier-stations', category: 'Transport', title: 'Rectifier stations',
     question: 'Where are the stations that power the trams and trolleybuses?',
     layers: ['rectifier-stations', 'transit-routes'], areas: null, list: 'areas', drawer: 'folded' },
+  { id: 'playgrounds', category: 'Green spaces', title: 'Playgrounds',
+    question: 'Do the children have a playground within 300 m of home?',
+    layers: ['playgrounds'], areas: { kind: 'neighbourhood', metric: 'children_playground_share_300' },
+    list: 'areas', drawer: 'open' },
+  { id: 'children-per-playground', category: 'Green spaces', title: 'Children per playground',
+    question: 'How many children share each playground?',
+    layers: ['playgrounds'], areas: { kind: 'district', metric: 'children_per_playground' },
+    list: 'areas', drawer: 'open' },
+  { id: 'markets', category: 'Planning', title: 'Markets',
+    question: 'Who lives within 1 km of a municipal market?',
+    layers: ['markets'], areas: { kind: 'neighbourhood', metric: 'market_share_1000' },
+    list: 'areas', drawer: 'open' },
   { id: 'data-issues', category: 'Technical', title: 'Data issues',
     question: 'Where are the source data missing, wrong, or in disagreement with each other?',
     layers: ALL_LAYERS, areas: null, panel: 'issues',

@@ -158,6 +158,8 @@
   <label class="toggle"><input type="checkbox" data-key="polling-places" data-layers="polling-places"> Polling places</label>
   <label class="toggle"><input type="checkbox" data-key="master-plan" data-layers="master-plan-fill,master-plan-line,master-plan-long-term"> Master plan zones (2009)</label>
   <label class="toggle"><input type="checkbox" data-key="rectifier-stations" data-layers="rectifier-stations"> Rectifier stations (trams, trolleybuses)</label>
+  <label class="toggle"><input type="checkbox" data-key="playgrounds" data-layers="playgrounds"> Playgrounds</label>
+  <label class="toggle"><input type="checkbox" data-key="markets" data-layers="markets"> Markets</label>
   </details>
 
   <!-- Each legend shows only while one of its layers is drawn on screen. -->
@@ -421,6 +423,10 @@ const METRICS = {
                         colors: ORANGE, pct: true, byArea: true },
   light_not_working_share: { label: 'Street lights not working (2017)', breaks: [0.01, 0.02, 0.05, 0.1],
                         colors: ORANGE, pct: true, byArea: true },
+  playground_share_300: { label: 'Playgrounds: residents within 300 m', breaks: PCT, colors: GREEN, pct: true },
+  children_playground_share_300: { label: 'Playgrounds: children 0–14 within 300 m', breaks: PCT, colors: GREEN, pct: true },
+  children_per_playground: { label: 'Children 0–14 per playground', breaks: [40, 80, 150, 250], colors: ORANGE },
+  market_share_1000:  { label: 'Markets: residents within 1 km', breaks: PCT, colors: GREEN, pct: true },
   dkc_unserved_pct:   { label: 'Residents with no polyclinic (DKC) on foot, % (Sofiaplan)', indicator: 'dkc_unserved_pct',
                         breaks: [1, 10, 30, 60], colors: ORANGE },
 };
@@ -439,7 +445,8 @@ let transitStops = null, transitRoutes = null, transitLoading = null;
 // Census tracts, the 1 km grid and the polling places load the first time
 // they are shown (loadSmall), each into the source of the same name.
 const SMALL = { 'census-tracts': '/api/census-tracts', 'population-grid': '/api/population-grid',
-                'polling-places': '/api/polling-sections', 'rectifier-stations': '/api/rectifier-stations' };
+                'polling-places': '/api/polling-sections', 'rectifier-stations': '/api/rectifier-stations',
+                'playgrounds': '/api/playgrounds', 'markets': '/api/markets' };
 const smallData = {}, smallLoading = {};
 const TRACT_BREAKS = [0.1, 0.15, 0.2, 0.25];
 const GRID_BREAKS = [100, 1000, 3000, 6000, 10000], GRID_COLORS = ['#fff5eb', ...ORANGE];
@@ -590,6 +597,17 @@ map.on('load', async () => {
     layout: { visibility: 'none' },
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 17, 9],
              'circle-color': '#ffd400', 'circle-stroke-color': '#333', 'circle-stroke-width': 1.5 } });
+  // Planned playgrounds are hollow.
+  map.addLayer({ id: 'playgrounds', type: 'circle', source: 'playgrounds', minzoom: 12,
+    layout: { visibility: 'none' },
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 2.5, 17, 6],
+             'circle-color': ['case', ['==', ['get', 'status'], 'planned'], '#fff', '#e7298a'],
+             'circle-stroke-color': ['case', ['==', ['get', 'status'], 'planned'], '#e7298a', '#fff'],
+             'circle-stroke-width': 1.5 } });
+  map.addLayer({ id: 'markets', type: 'circle', source: 'markets',
+    layout: { visibility: 'none' },
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 17, 9],
+             'circle-color': '#66a61e', 'circle-stroke-color': '#333', 'circle-stroke-width': 1.5 } });
   // Closed and doubtful kindergartens (and schools with no classes) are faded.
   map.addLayer({ id: 'kindergartens', type: 'circle', source: 'kindergartens', minzoom: 12,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 2.5, 17, 6],
@@ -698,8 +716,14 @@ map.on('load', async () => {
     if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'transit-stops'] }).length) return;
     selectPollingSection(e.features[0].properties.id);
   });
-  const POINTS = [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'polling-places', 'rectifier-stations'];
+  const POINTS = [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'polling-places', 'rectifier-stations',
+                  'playgrounds', 'markets'];
   map.on('click', 'rectifier-stations', e => selectRectifierStation(e.features[0].properties.id));
+  map.on('click', 'markets', e => selectMarket(e.features[0].properties.id));
+  map.on('click', 'playgrounds', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'markets'] }).length) return;
+    selectPlayground(e.features[0].properties.id);
+  });
   map.on('click', 'census-tracts-fill', e => {
     if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill'] }).length) return;
     selectCensusTract(e.features[0].properties.id);
@@ -714,7 +738,7 @@ map.on('load', async () => {
     selectGridCell(e.features[0].properties.id);
   });
   for (const id of ['polling-places', 'rectifier-stations', 'census-tracts-fill', 'population-grid-fill',
-                    'master-plan-fill']) {
+                    'master-plan-fill', 'playgrounds', 'markets']) {
     map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   }
@@ -734,7 +758,8 @@ map.on('load', async () => {
   // ?kindergarten=<id>, ?school=<id>, ?transit_stop=<id>,
   // ?transit_route=<id>, ?building=<id>, ?polling_section=<id>,
   // ?census_tract=<id>, ?grid_cell=<id>, ?rectifier_station=<id>,
-  // ?master_plan_zone=<id> or ?area=<kind>:<id> opens the page
+  // ?master_plan_zone=<id>, ?playground=<id>, ?market=<id>
+  // or ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   applyFocus(q.get('focus') || 'overview');
@@ -752,6 +777,8 @@ map.on('load', async () => {
   else if (q.has('grid_cell')) selectGridCell(q.get('grid_cell'), false);
   else if (q.has('rectifier_station')) selectRectifierStation(+q.get('rectifier_station'), false);
   else if (q.has('master_plan_zone')) selectMasterPlanZone(+q.get('master_plan_zone'), false);
+  else if (q.has('playground')) selectPlayground(+q.get('playground'), false);
+  else if (q.has('market')) selectMarket(+q.get('market'), false);
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
@@ -970,6 +997,61 @@ async function selectRectifierStation(id, animate) {
       <dt>District</dt><dd>${esc(p.district || '—')}</dd>
       <dt>Built</dt><dd>${esc(p.built || '—')}</dd>
       <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
+}
+
+const MEASURE_LABEL = { 'major repair': 'major repair', 'partial repair': 'partial repair',
+                        new: 'newly built', planned: 'to be built' };
+async function selectPlayground(id, animate) {
+  const fc = await showLayer('playgrounds');
+  const f = fc.features.find(f => f.properties.id === id); if (!f) return;
+  const p = f.properties;
+  // GeoJSON sources hand nested objects back as strings.
+  const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment) : p.equipment;
+  select('playground', id);
+  highlight([f.geometry.coordinates]);
+  moveTo(f.geometry.coordinates, 17, animate);
+  const yesNo = v => v == null ? '—' : v ? 'yes' : 'no';
+  document.getElementById('info').innerHTML = `
+    <h3>Playground ${esc(p.number || '')}</h3>
+    <div>${esc(p.location || '—')}</div>
+    <dl>
+      <dt>Status</dt><dd>${p.status === 'planned' ? 'planned, not built' : 'existing'}</dd>
+      <dt>Programme</dt><dd>${esc(MEASURE_LABEL[p.measure] || p.measure || '—')}</dd>
+      <dt>Managed by</dt><dd>${esc(p.managed_by || '—')}</dd>
+      <dt>Ownership</dt><dd>${esc(p.ownership || '—')}</dd>
+      <dt>Ages</dt><dd>${esc(p.age_groups || '—')}</dd>
+      <dt>Area</dt><dd>${p.area_m2 != null ? num(p.area_m2) + ' m²' : esc(p.area_source || '—')}</dd>
+      <dt>Meets Наредба 1</dt><dd>${yesNo(p.meets_regulation)}</dd>
+      <dt>Shade</dt><dd>${yesNo(p.shade)}</dd>
+      <dt>Built</dt><dd>${esc(p.built || '—')}</dd>
+      ${eq && Object.values(eq).some(v => v > 0) ? `<dt>Equipment</dt><dd>${Object.entries(eq).filter(([, v]) => v > 0)
+        .map(([k, v]) => `${esc(k)} ${num(v)}`).join(', ')}</dd>` : ''}
+      ${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}
+      <dt>District</dt><dd>${esc(p.district || '—')}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)} (published)</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
+}
+
+async function selectMarket(id, animate) {
+  const fc = await showLayer('markets');
+  const f = fc.features.find(f => f.properties.id === id); if (!f) return;
+  const p = f.properties;
+  select('market', id);
+  highlight([f.geometry.coordinates]);
+  moveTo(f.geometry.coordinates, 16, animate);
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.name)}</h3>
+    <div>Municipal market.</div>
+    <dl>
+      <dt>Address</dt><dd>${esc(p.address || '—')}</dd>
+      <dt>Operator</dt><dd>${esc(p.operator || '—')}</dd>
+      ${p.website ? `<dt>Website</dt><dd><a href="${esc(p.website)}" target="_blank" rel="noopener">${esc(p.website)}</a></dd>` : ''}
+      ${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}
+      <dt>District</dt><dd>${esc(p.district || '—')}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)} (published)</dd>
       <dt>Source</dt><dd>${esc(p.source)}</dd>
     </dl>`;
 }
@@ -1324,6 +1406,17 @@ async function selectArea(kind, id, animate) {
       residents 2019); the median building has ${num(t.median_peak_per_hour)} an hour on weekdays 7–9.</div>
     ${t.sofiaplan_transit_share_400 != null ? `<div class="sub" style="margin-top:6px">Sofiaplan (2021, 400 m on foot):
       ${pct(t.sofiaplan_transit_share_400)} of residents near a stop; we find ${pct(t.transit_share_400)}.</div>` : ''}`)(a.transit_access)
+      : '<div class="empty">No residents in the 2019 building data.</div>'}
+    <h4>Playgrounds and markets</h4>
+    ${a.amenities && a.amenities.people ? (y => `<table class="access">
+      <tr><td>playgrounds</td><td>${num(y.playgrounds)} <span class="sub">${num(y.children_per_playground)} children each</span></td></tr>
+      <tr><td>residents ≤ 300 m from one</td><td>${pct(y.playground_share_300)}</td></tr>
+      <tr><td>children 0–14 ≤ 300 m from one</td><td>${pct(y.children_playground_share_300)}</td></tr>
+      <tr><td>markets</td><td>${num(y.markets)}</td></tr>
+      <tr><td>residents ≤ 1 km from one</td><td>${pct(y.market_share_1000)}</td></tr>
+    </table>
+    <div class="sub">Straight line to an existing playground in the municipal register, or to a municipal
+      market (both published 2026); residents 2019.</div>`)(a.amenities)
       : '<div class="empty">No residents in the 2019 building data.</div>'}
     <h4>Master plan 2009</h4>
     ${a.master_plan ? (m => { const total = m.reduce((t, g) => t + +g.area_ha, 0); return `<table class="access">

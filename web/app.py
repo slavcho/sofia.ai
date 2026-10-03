@@ -652,7 +652,11 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'light_led_share', l.led_share, 'light_poor_share', l.poor_share,
                        'light_not_working_share', l.not_working_share,
                        'plan_residential_share', p.residential_share, 'plan_green_share', p.green_share,
-                       'plan_production_share', p.production_share)) AS feature
+                       'plan_production_share', p.production_share,
+                       'playground_share_300', y.playground_share_300,
+                       'children_playground_share_300', y.children_playground_share_300,
+                       'children_per_playground', y.children_per_playground,
+                       'market_share_1000', y.market_share_1000)) AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
@@ -674,6 +678,8 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                  ON b.area_kind = %(kind)s AND b.area_id = a.{a['key']}::text
           LEFT JOIN area_lighting l
                  ON l.area_kind = %(kind)s AND l.area_id = a.{a['key']}::text
+          LEFT JOIN area_amenity_access y
+                 ON y.area_kind = %(kind)s AND y.area_id = a.{a['key']}::text
           LEFT JOIN (SELECT area_id,
                             round(sum(area_ha) FILTER (WHERE zone_group IN ('residential', 'central', 'mixed'))
                                   / sum(area_ha), 4) AS residential_share,
@@ -732,6 +738,8 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                      WHERE m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text),
                     'lighting', (SELECT row_to_json(l) FROM area_lighting l
                                   WHERE l.area_kind = %(kind)s AND l.area_id = a.{a['key']}::text),
+                    'amenities', (SELECT row_to_json(y) FROM area_amenity_access y
+                                   WHERE y.area_kind = %(kind)s AND y.area_id = a.{a['key']}::text),
                     'indicators', (SELECT json_agg(json_build_object(
                                         'id', i.id, 'label', i.label, 'unit', i.unit, 'theme', i.theme,
                                         'data_as_of', i.data_as_of, 'breakdown', v.breakdown,
@@ -857,6 +865,41 @@ def rectifier_stations():
                        'district', d.name, 'data_as_of', s.data_as_of,
                        'source', s.source_dataset || ' #' || s.source_fid)) AS feature
           FROM rectifier_stations s LEFT JOIN districts d ON d.code = s.district_code
+    """))
+
+
+# Playgrounds from the municipal register (amenities.sql).
+@app.get("/api/playgrounds")
+def playgrounds():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', p.id,
+                   'geometry', ST_AsGeoJSON(p.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', p.id, 'number', p.number, 'location', p.location, 'status', p.status,
+                       'measure', p.measure, 'managed_by', p.managed_by, 'ownership', p.ownership,
+                       'age_groups', p.age_groups, 'area_m2', p.area_m2, 'area_source', p.area_source,
+                       'meets_regulation', p.meets_regulation, 'shade', p.shade, 'built', p.built,
+                       'equipment', p.equipment, 'note', p.note, 'district', d.name,
+                       'data_as_of', p.data_as_of,
+                       'source', p.source_dataset || ' #' || p.source_fid)) AS feature
+          FROM playgrounds p LEFT JOIN districts d ON d.code = p.district_code
+    """))
+
+
+# Municipal markets (amenities.sql).
+@app.get("/api/markets")
+def markets():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', m.id,
+                   'geometry', ST_AsGeoJSON(m.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', m.id, 'name', m.name, 'operator', m.operator, 'address', m.address,
+                       'website', m.website, 'note', m.note, 'district', d.name,
+                       'data_as_of', m.data_as_of,
+                       'source', m.source_dataset || ' #' || m.source_fid)) AS feature
+          FROM markets m LEFT JOIN districts d ON d.code = m.district_code
     """))
 
 
