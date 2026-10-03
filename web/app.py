@@ -610,7 +610,10 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'median_built_year', n.median_built_year,
                        'residents_2019_vs_census', n.residents_2019_vs_census,
                        'residential_mean_floors', b.residential_mean_floors,
-                       'floor_area_per_resident', round(b.floor_area_m2 / nullif(a.population, 0)))) AS feature
+                       'floor_area_per_resident', round(b.floor_area_m2 / nullif(a.population, 0)),
+                       'lights_per_km2', round(l.street_lights / nullif(a.area_km2, 0)),
+                       'light_led_share', l.led_share, 'light_poor_share', l.poor_share,
+                       'light_not_working_share', l.not_working_share)) AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
@@ -630,6 +633,8 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                  ON n.area_kind = %(kind)s AND n.area_id = a.{a['key']}::text
           LEFT JOIN area_buildings b
                  ON b.area_kind = %(kind)s AND b.area_id = a.{a['key']}::text
+          LEFT JOIN area_lighting l
+                 ON l.area_kind = %(kind)s AND l.area_id = a.{a['key']}::text
          ORDER BY a.{a['key']}
     """), {"kind": kind})
 
@@ -673,6 +678,8 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                 WHERE n.area_kind = %(kind)s AND n.area_id = a.{a['key']}::text),
                     'buildings', (SELECT row_to_json(b) FROM area_buildings b
                                    WHERE b.area_kind = %(kind)s AND b.area_id = a.{a['key']}::text),
+                    'lighting', (SELECT row_to_json(l) FROM area_lighting l
+                                  WHERE l.area_kind = %(kind)s AND l.area_id = a.{a['key']}::text),
                     'indicators', (SELECT json_agg(json_build_object(
                                         'id', i.id, 'label', i.label, 'unit', i.unit, 'theme', i.theme,
                                         'data_as_of', i.data_as_of, 'breakdown', v.breakdown,
@@ -783,6 +790,21 @@ def polling_sections():
                        'residents_2019', s.residents_2019, 'mean_distance_m', s.mean_distance_m,
                        'max_distance_m', s.max_distance_m, 'has_area', s.area IS NOT NULL)) AS feature
           FROM polling_sections s
+    """))
+
+
+# Traction rectifier stations (ТИС) of the trams and trolleybuses.
+@app.get("/api/rectifier-stations")
+def rectifier_stations():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', s.id,
+                   'geometry', ST_AsGeoJSON(s.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', s.id, 'name', s.name, 'built', s.built, 'address', s.address,
+                       'district', d.name, 'data_as_of', s.data_as_of,
+                       'source', s.source_dataset || ' #' || s.source_fid)) AS feature
+          FROM rectifier_stations s LEFT JOIN districts d ON d.code = s.district_code
     """))
 
 

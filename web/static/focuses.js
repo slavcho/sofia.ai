@@ -10,7 +10,7 @@ const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Health', 'P
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
                       'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools',
                       'transit-stops', 'transit-routes', 'buildings',
-                      'census-tracts', 'population-grid', 'polling-places'];
+                      'census-tracts', 'population-grid', 'polling-places', 'rectifier-stations'];
 const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 
 // Planned parks stay off: they are master plan zones, much of it forest.
@@ -18,7 +18,8 @@ const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 // and so do the 265,000 buildings. The census tracts, the grid and the
 // polling places cover the whole map, so they come with their own focus.
 const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'buildings',
-                                              'census-tracts', 'population-grid', 'polling-places'].includes(k));
+                                              'census-tracts', 'population-grid', 'polling-places',
+                                              'rectifier-stations'].includes(k));
 
 const FOCUSES = [
   { id: 'overview', category: null, title: 'Overview',
@@ -215,6 +216,21 @@ const FOCUSES = [
   { id: 'polling-places', category: 'Elections', title: 'Polling places',
     question: 'How far do voters walk to their polling place, and which section areas do not match their place?',
     layers: ['polling-places'], areas: null, list: 'areas', drawer: 'folded', minZoom: 12 },
+  { id: 'street-lights-led', category: 'Energy', title: 'LED street lights',
+    question: 'Where had the street lights been changed to LED by 2017?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'light_led_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'street-lights-condition', category: 'Technical', title: 'Street lights in poor condition',
+    question: 'Where were the street lights in poor condition or not working in 2017?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'light_poor_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'street-lights-density', category: 'Technical', title: 'Street lights per km²',
+    question: 'How densely are the streets lit across the city?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'lights_per_km2' },
+    list: 'areas', drawer: 'open' },
+  { id: 'rectifier-stations', category: 'Transport', title: 'Rectifier stations',
+    question: 'Where are the stations that power the trams and trolleybuses?',
+    layers: ['rectifier-stations', 'transit-routes'], areas: null, list: 'areas', drawer: 'folded' },
   { id: 'data-issues', category: 'Technical', title: 'Data issues',
     question: 'Where are the source data missing, wrong, or in disagreement with each other?',
     layers: ALL_LAYERS, areas: null, panel: 'issues',

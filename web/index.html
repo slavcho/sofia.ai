@@ -156,6 +156,7 @@
   <label class="toggle"><input type="checkbox" data-key="census-tracts" data-layers="census-tracts-fill,census-tracts-line"> Census tracts</label>
   <label class="toggle"><input type="checkbox" data-key="population-grid" data-layers="population-grid-fill,population-grid-line"> Population grid 1 km (2011)</label>
   <label class="toggle"><input type="checkbox" data-key="polling-places" data-layers="polling-places"> Polling places</label>
+  <label class="toggle"><input type="checkbox" data-key="rectifier-stations" data-layers="rectifier-stations"> Rectifier stations (trams, trolleybuses)</label>
   </details>
 
   <!-- Each legend shows only while one of its layers is drawn on screen. -->
@@ -394,6 +395,15 @@ const METRICS = {
   energy_heat_pumps_share_2050: { label: 'Heat from air heat pumps, 2050 (realistic scenario)',
                         indicator: 'energy_air_heat_pumps_mwh', breakdown: '2050', per: 'energy_heat_demand_mwh',
                         breaks: [0.05, 0.1, 0.15, 0.2], colors: GREEN, pct: true },
+  // The street lighting is not about residents: byArea colours every
+  // area with a value.
+  lights_per_km2:     { label: 'Street lights per km² (2017)', breaks: [100, 300, 600, 1000], colors: ORANGE, byArea: true },
+  light_led_share:    { label: 'Street lights that are LED (2017)', breaks: [0.01, 0.05, 0.15, 0.3],
+                        colors: GREEN, pct: true, byArea: true },
+  light_poor_share:   { label: 'Street lights in poor or very poor condition (2017)', breaks: [0.02, 0.05, 0.1, 0.2],
+                        colors: ORANGE, pct: true, byArea: true },
+  light_not_working_share: { label: 'Street lights not working (2017)', breaks: [0.01, 0.02, 0.05, 0.1],
+                        colors: ORANGE, pct: true, byArea: true },
   dkc_unserved_pct:   { label: 'Residents with no polyclinic (DKC) on foot, % (Sofiaplan)', indicator: 'dkc_unserved_pct',
                         breaks: [1, 10, 30, 60], colors: ORANGE },
 };
@@ -412,7 +422,7 @@ let transitStops = null, transitRoutes = null, transitLoading = null;
 // Census tracts, the 1 km grid and the polling places load the first time
 // they are shown (loadSmall), each into the source of the same name.
 const SMALL = { 'census-tracts': '/api/census-tracts', 'population-grid': '/api/population-grid',
-                'polling-places': '/api/polling-sections' };
+                'polling-places': '/api/polling-sections', 'rectifier-stations': '/api/rectifier-stations' };
 const smallData = {}, smallLoading = {};
 const TRACT_BREAKS = [0.1, 0.15, 0.2, 0.25];
 const GRID_BREAKS = [100, 1000, 3000, 6000, 10000], GRID_COLORS = ['#fff5eb', ...ORANGE];
@@ -545,6 +555,10 @@ map.on('load', async () => {
              'circle-color': ['case', ['==', ['get', 'mean_distance_m'], null], NO_DATA,
                               ['step', ['get', 'mean_distance_m'], ...POLL_COLORS.flatMap((c, i) => i ? [POLL_BREAKS[i - 1], c] : [c])]],
              'circle-stroke-color': '#333', 'circle-stroke-width': 1 } });
+  map.addLayer({ id: 'rectifier-stations', type: 'circle', source: 'rectifier-stations',
+    layout: { visibility: 'none' },
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 17, 9],
+             'circle-color': '#ffd400', 'circle-stroke-color': '#333', 'circle-stroke-width': 1.5 } });
   // Closed and doubtful kindergartens (and schools with no classes) are faded.
   map.addLayer({ id: 'kindergartens', type: 'circle', source: 'kindergartens', minzoom: 12,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 2.5, 17, 6],
@@ -650,7 +664,8 @@ map.on('load', async () => {
     if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'transit-stops'] }).length) return;
     selectPollingSection(e.features[0].properties.id);
   });
-  const POINTS = [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'polling-places'];
+  const POINTS = [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'polling-places', 'rectifier-stations'];
+  map.on('click', 'rectifier-stations', e => selectRectifierStation(e.features[0].properties.id));
   map.on('click', 'census-tracts-fill', e => {
     if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill'] }).length) return;
     selectCensusTract(e.features[0].properties.id);
@@ -659,7 +674,7 @@ map.on('load', async () => {
     if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill'] }).length) return;
     selectGridCell(e.features[0].properties.id);
   });
-  for (const id of ['polling-places', 'census-tracts-fill', 'population-grid-fill']) {
+  for (const id of ['polling-places', 'rectifier-stations', 'census-tracts-fill', 'population-grid-fill']) {
     map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   }
@@ -677,7 +692,8 @@ map.on('load', async () => {
   // ?station=<id>, ?entrance=<id>, ?park=<id>, ?park_entrance=<id>,
   // ?kindergarten=<id>, ?school=<id>, ?transit_stop=<id>,
   // ?transit_route=<id>, ?building=<id>, ?polling_section=<id>,
-  // ?census_tract=<id>, ?grid_cell=<id> or ?area=<kind>:<id> opens the page
+  // ?census_tract=<id>, ?grid_cell=<id>, ?rectifier_station=<id> or
+  // ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   applyFocus(q.get('focus') || 'overview');
@@ -693,6 +709,7 @@ map.on('load', async () => {
   else if (q.has('polling_section')) selectPollingSection(q.get('polling_section'), false);
   else if (q.has('census_tract')) selectCensusTract(q.get('census_tract'), false);
   else if (q.has('grid_cell')) selectGridCell(q.get('grid_cell'), false);
+  else if (q.has('rectifier_station')) selectRectifierStation(+q.get('rectifier_station'), false);
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
@@ -873,6 +890,26 @@ async function selectPollingSection(id, animate) {
     </dl>`;
 }
 
+async function selectRectifierStation(id, animate) {
+  const fc = await showLayer('rectifier-stations');
+  const f = fc.features.find(f => f.properties.id === id); if (!f) return;
+  const p = f.properties;
+  select('rectifier_station', id);
+  highlight([f.geometry.coordinates]);
+  moveTo(f.geometry.coordinates, 15, animate);
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.name)}</h3>
+    <div>Traction rectifier station: turns the grid's alternating current into direct current
+      for the trams and trolleybuses.</div>
+    <dl>
+      <dt>Address</dt><dd>${esc(p.address || '—')}</dd>
+      <dt>District</dt><dd>${esc(p.district || '—')}</dd>
+      <dt>Built</dt><dd>${esc(p.built || '—')}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
+    </dl>`;
+}
+
 async function selectCensusTract(id, animate) {
   const fc = await showLayer('census-tracts');
   const f = fc.features.find(f => f.properties.id === id); if (!f) return;
@@ -1021,9 +1058,11 @@ function paintAreas() {
   const m = METRICS[areaMetric], key = areaMetric;
   const steps = m.colors.flatMap((c, i) => i ? [m.breaks[i - 1], c] : [c]);
   // An indicator is grey where the source has no value; our own shares
-  // where too few people live for a share to mean much.
+  // where too few people live for a share to mean much, unless they are
+  // not about people (byArea).
+  const byValue = m.indicator || m.byArea;
   map.setPaintProperty('areas-fill', 'fill-color',
-    ['case', m.indicator ? ['==', ['get', key], null] : ['<', ['coalesce', ['get', 'population'], 0], MIN_PEOPLE], NO_DATA,
+    ['case', byValue ? ['==', ['get', key], null] : ['<', ['coalesce', ['get', 'population'], 0], MIN_PEOPLE], NO_DATA,
              ['step', ['coalesce', ['get', key], 0], ...steps]]);
   const fmt = v => m.pct ? Math.round(v * 100) + '%' : m.plain ? String(v) : Number(v).toLocaleString();
   const labels = m.labels || m.colors.map((_, i) =>
@@ -1032,7 +1071,7 @@ function paintAreas() {
   document.getElementById('area-legend-title').textContent = `${{ district: 'Districts', neighbourhood: 'Neighbourhoods', planning_unit: 'Planning units' }[areaKind] || 'Areas'}: ${m.label}`;
   document.getElementById('area-legend').innerHTML = !areaKind ? '' :
     m.colors.map((c, i) => `<span><i class="swatch" style="background:${c}"></i>${labels[i]}</span>`).join('') +
-    `<span><i class="swatch" style="background:${NO_DATA}"></i>${m.indicator ? 'no data' : `&lt; ${MIN_PEOPLE} residents`}</span>`;
+    `<span><i class="swatch" style="background:${NO_DATA}"></i>${byValue ? 'no data' : `&lt; ${MIN_PEOPLE} residents`}</span>`;
   if (listName === 'areas') renderList();
 }
 
@@ -1222,6 +1261,15 @@ async function selectArea(kind, id, animate) {
     ${t.sofiaplan_transit_share_400 != null ? `<div class="sub" style="margin-top:6px">Sofiaplan (2021, 400 m on foot):
       ${pct(t.sofiaplan_transit_share_400)} of residents near a stop; we find ${pct(t.transit_share_400)}.</div>` : ''}`)(a.transit_access)
       : '<div class="empty">No residents in the 2019 building data.</div>'}
+    <h4>Street lighting (2017)</h4>
+    ${a.lighting ? (l => `<table class="access">
+      <tr><td>street lights</td><td>${num(l.street_lights)} <span class="sub">${num(Math.round(l.street_lights / a.area_km2))} per km²</span></td></tr>
+      <tr><td>LED</td><td>${pct(l.led_share)}</td></tr>
+      <tr><td>poor or very poor condition</td><td>${pct(l.poor_share)}</td></tr>
+      <tr><td>not working</td><td>${pct(l.not_working_share)}</td></tr>
+    </table>
+    <div class="sub">The municipality's survey of the street lighting, November 2017.</div>`)(a.lighting)
+      : '<div class="empty">No street lights in the 2017 survey.</div>'}
     <h4>Buildings and the 2011 census</h4>
     ${a.buildings ? (b => `<div class="sub">${num(b.buildings)} outlines in the cadastral plan, ${num(b.residential_buildings)}
       residential (mean ${num(b.residential_mean_floors)} floors), ${num(b.municipal_buildings)} municipal;
