@@ -23,7 +23,6 @@
 --       census_addresses, its buildings in buildings.
 --   demographic-projection-by-kopralev-for-urban-planning-units
 --       the same forecast on the older division; the adjusted one is used.
---   energy-development-scenarios-by-urban-planning-units  (energy.sql)
 
 \set ON_ERROR_STOP on
 SET search_path = city, urban, public;
@@ -147,7 +146,49 @@ INSERT INTO defs VALUES
    'Kopralev''s realistic forecast by year.'),
   ('forecast_age_65_plus', 'Forecast residents aged 65+, realistic', 'people', 'Population',
    'demographic-forecast-by-kopralev-adjusted-to-the-new-urban-planning-units', '', '', NULL,
-   'Kopralev''s realistic forecast by year.');
+   'Kopralev''s realistic forecast by year.'),
+  ('energy_population', 'Residents in the energy scenarios', 'people', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: the residents each scenario assumes (nasel). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_heat_demand_mwh', 'Heat demand: heating and hot water', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: heating plus hot water (s_mwth). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_space_heating_mwh', 'Heat demand: space heating', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: space heating (sotopl). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_hot_water_mwh', 'Heat demand: hot water', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: domestic hot water (s_bgv). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_district_heating_mwh', 'Heat from district heating', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: heat supplied by district heating (stec). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_gas_mwh', 'Heat from natural gas', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: heat from natural gas (gaz). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_electric_heating_mwh', 'Heat from electric heating', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: heat from electric heaters (elotop). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_pellets_mwh', 'Heat from pellets', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: heat from pellets (pelet). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_coal_mwh', 'Heat from coal', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: heat from coal (vugl). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_air_heat_pumps_mwh', 'Heat from air heat pumps', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: heat from air-source heat pumps (airtp). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_spest_mwh', 'Heat: "spest" (not explained)', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: a heat source the file calls spest, not explained; it grows like the heat pumps, possibly ground-source ones. The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_solar_thermal_mwh', 'Heat from solar collectors', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: heat from solar thermal collectors (solart). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_solar_pv_mwh', 'Electricity from rooftop solar', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: electricity from photovoltaics (photov). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".'),
+  ('energy_electricity_lighting_mwh', 'Electricity for lighting and appliances', 'MWh', 'Energy',
+   'energy-development-scenarios-by-urban-planning-units', '', '', '2020-08-11',
+   'Sofiaplan''s energy scenarios (2020), per year: electricity for lighting and appliances (elosv; the meaning is inferred from the name). The breakdown is 2017, or the year of the realistic scenario, or the year and "optimistic" or "pessimistic".');
 
 CREATE TEMP TABLE src ON COMMIT DROP AS
 SELECT d.name AS dataset, f.source_fid, f.properties AS p, f.geom
@@ -247,6 +288,41 @@ SELECT m.planning_unit_id, x.indicator, y.year::text,
  CROSS JOIN (VALUES (2020), (2030), (2040), (2050)) y(year)
  WHERE s.dataset = 'demographic-forecast-by-kopralev-adjusted-to-the-new-urban-planning-units'
    AND m.planning_unit_id IS NOT NULL;
+
+-- The energy scenarios: <field><2017 suffix> for 2017, and for each
+-- decade <field>_<yy>_<s>, <field>_<yy><s> or <field><yy><s>, where s is
+-- r, o or p. Realistic goes under the bare year, as the forecast's does;
+-- only some fields have the other two scenarios. The units are not given:
+-- MWh a year, going by s_mwth and the size of the numbers.
+INSERT INTO planning_unit_indicators (planning_unit_id, indicator, breakdown, value, match, source_fid)
+SELECT m.planning_unit_id, x.indicator, b.breakdown, b.value, m.match, s.source_fid
+  FROM src s
+  JOIN unit_match m ON m.dataset = s.dataset AND m.source_fid = s.source_fid
+ CROSS JOIN (VALUES ('energy_population', 'nasel', 'nasel_17'),
+                    ('energy_heat_demand_mwh', 's_mwth', 's_mwth1517'),
+                    ('energy_space_heating_mwh', 'sotopl', 'sotopl1517'),
+                    ('energy_hot_water_mwh', 's_bgv', 's_bgv15_17'),
+                    ('energy_district_heating_mwh', 'stec', 'stec_17'),
+                    ('energy_gas_mwh', 'gaz', 'gaz_17'),
+                    ('energy_electric_heating_mwh', 'elotop', 'elotop_17'),
+                    ('energy_pellets_mwh', 'pelet', 'pelet_17'),
+                    ('energy_coal_mwh', 'vugl', 'vugl_15_17'),
+                    ('energy_air_heat_pumps_mwh', 'airtp', 'airtp_17'),
+                    ('energy_spest_mwh', 'spest', 'spest_17'),
+                    ('energy_solar_thermal_mwh', 'solart', 'solart_17'),
+                    ('energy_solar_pv_mwh', 'photov', 'photov_17'),
+                    ('energy_electricity_lighting_mwh', 'elosv', 'elosv_17')) x(indicator, prefix, base)
+ CROSS JOIN LATERAL (
+       SELECT '2017' AS breakdown, (s.p->>x.base)::numeric AS value
+       UNION ALL
+       SELECT y.yy || CASE c.sc WHEN 'r' THEN '' WHEN 'o' THEN ' optimistic' ELSE ' pessimistic' END,
+              coalesce(s.p->>(x.prefix || '_' || right(y.yy, 2) || '_' || c.sc),
+                       s.p->>(x.prefix || '_' || right(y.yy, 2) || c.sc),
+                       s.p->>(x.prefix || right(y.yy, 2) || c.sc))::numeric
+         FROM (VALUES ('2030'), ('2040'), ('2050')) y(yy)
+        CROSS JOIN (VALUES ('r'), ('o'), ('p')) c(sc)) b
+ WHERE s.dataset = 'energy-development-scenarios-by-urban-planning-units'
+   AND m.planning_unit_id IS NOT NULL AND b.value IS NOT NULL;
 
 DELETE FROM planning_unit_indicators WHERE value IS NULL AND value_text IS NULL;
 ANALYZE planning_unit_indicators;

@@ -1364,7 +1364,19 @@ SELECT 'percentage outside 0-100', v.indicator,
   FROM planning_unit_indicators v
   JOIN indicators i ON i.id = v.indicator AND i.unit = '%'
   LEFT JOIN planning_units u ON u.id = v.planning_unit_id
- WHERE v.value < 0 OR v.value > 100;
+ WHERE v.value < 0 OR v.value > 100
+UNION ALL
+-- In the energy scenarios the heat demand is heating plus hot water,
+-- except in a few units, nearly all in the optimistic 2050.
+SELECT 'heat demand is not heating plus hot water', t.indicator,
+       format('%s, %s: %s MWh, but %s + %s', u.name, t.breakdown, round(t.value), round(h.value), round(w.value))
+  FROM planning_unit_indicators t
+  JOIN planning_unit_indicators h ON h.planning_unit_id = t.planning_unit_id AND h.breakdown = t.breakdown
+   AND h.indicator = 'energy_space_heating_mwh'
+  JOIN planning_unit_indicators w ON w.planning_unit_id = t.planning_unit_id AND w.breakdown = t.breakdown
+   AND w.indicator = 'energy_hot_water_mwh'
+  LEFT JOIN planning_units u ON u.id = t.planning_unit_id
+ WHERE t.indicator = 'energy_heat_demand_mwh' AND abs(t.value - h.value - w.value) > 1;
 
 -- ------------------------------------------- small statistical areas
 

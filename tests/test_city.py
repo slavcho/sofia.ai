@@ -801,7 +801,8 @@ class IndicatorsTest(unittest.TestCase):
         self.assertEqual(self.scalar("""
             SELECT count(*) FROM city.indicators
              WHERE unmatched > 0
-               AND id NOT IN ('function_kinds', 'poi_density', 'dkc_unserved_pct')"""), 0)
+               AND id NOT IN ('function_kinds', 'poi_density', 'dkc_unserved_pct')
+               AND theme <> 'Energy'"""), 0)
 
     def test_totals_as_in_the_source(self):
         self.assertEqual(self.scalar("""
@@ -820,6 +821,42 @@ class IndicatorsTest(unittest.TestCase):
                        sum(value) FILTER (WHERE indicator = 'population_forecast_high') hi
                   FROM city.planning_unit_indicators GROUP BY breakdown) t
              WHERE NOT (lo <= mid AND mid <= hi)"""), 0)
+
+    def test_energy_heat_demand_mismatches_are_reported(self):
+        # The source's own mistakes, few, and each in the issues.
+        n = self.scalar("""
+            SELECT count(*) FROM city.indicator_issues
+             WHERE issue = 'heat demand is not heating plus hot water'""")
+        self.assertLess(n, 20)
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.planning_unit_indicators t
+              JOIN city.planning_unit_indicators h
+                ON h.planning_unit_id = t.planning_unit_id AND h.breakdown = t.breakdown
+               AND h.indicator = 'energy_space_heating_mwh'
+              JOIN city.planning_unit_indicators w
+                ON w.planning_unit_id = t.planning_unit_id AND w.breakdown = t.breakdown
+               AND w.indicator = 'energy_hot_water_mwh'
+             WHERE t.indicator = 'energy_heat_demand_mwh'
+               AND abs(t.value - h.value - w.value) > 1"""), n)
+
+    def test_energy_scenarios_by_decade(self):
+        # 2017, the realistic scenario by decade under the bare year, and
+        # the optimistic and pessimistic ones for the fields that have them.
+        self.assertEqual(self.scalar("""
+            SELECT string_agg(DISTINCT breakdown, ',' ORDER BY breakdown)
+              FROM city.planning_unit_indicators WHERE indicator = 'energy_heat_demand_mwh'"""),
+            '2017,2030,2030 optimistic,2030 pessimistic,2040,2040 optimistic,2040 pessimistic,'
+            '2050,2050 optimistic,2050 pessimistic')
+        self.assertEqual(self.scalar("""
+            SELECT string_agg(DISTINCT breakdown, ',' ORDER BY breakdown)
+              FROM city.planning_unit_indicators WHERE indicator = 'energy_district_heating_mwh'"""),
+            '2017,2030,2040,2050')
+
+    def test_energy_matches_most_units(self):
+        # The file is on the 2019 division (574 units); most still match.
+        self.assertGreater(self.scalar("""
+            SELECT count(DISTINCT planning_unit_id) FROM city.planning_unit_indicators
+             WHERE indicator = 'energy_heat_demand_mwh'"""), 450)
 
 
 class SmallAreasTest(unittest.TestCase):
