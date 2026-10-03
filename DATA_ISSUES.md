@@ -1054,3 +1054,43 @@ interpreted by `db/city/transit.sql`.
   (#80).
 - **Check:** `small_area_issues` ('polling place far from its
   section', 'polling place in another district than its section').
+
+## Energy
+
+### 82. The energy scenarios' fields and units are not explained
+
+- **Status:** worked around.
+- **What:** Sofiaplan's energy scenarios by planning unit (2020-08-11)
+  have some 130 fields named like `stec_30_r`, `sotopl1517`,
+  `elotop_30r`, with no description and no unit. The suffixes are
+  read as 2017 and as the realistic, optimistic and pessimistic
+  scenario of 2030, 2040 and 2050; the size of the numbers and
+  `s_mwth` suggest MWh a year. `elosv` is read as electricity for
+  lighting and appliances. `spest` grows like the heat pumps but is
+  not named after anything we can tell, so it is kept as "spest".
+  Only some fields have the optimistic and pessimistic scenarios.
+- **Handling:** `indicators.sql` loads 14 `energy_*` indicators; the
+  realistic scenario goes under the bare year, the others under
+  "<year> optimistic" / "<year> pessimistic". The descriptions say
+  what is inferred. Ask Sofiaplan for the field list.
+
+### 83. The energy scenarios use the older division of 574 units
+
+- **Status:** flagged.
+- **What:** as #69: 44 of the 574 units were redrawn since and match
+  no current unit, so 530 of 564 units have energy figures.
+- **Check:** `indicator_issues` ('source units not found among the
+  planning units').
+
+### 84. Heat demand is not always heating plus hot water
+
+- **Status:** flagged.
+- **What:** everywhere else `s_mwth` = `sotopl` + `s_bgv`, but in 16
+  (unit, scenario) pairs it is not: 13 units in the optimistic 2050,
+  off by up to 5,300 MWh in either direction, and one small unit in
+  all three 2050 scenarios. In 2017 the sources of heat (without
+  rooftop solar, which is electricity) add up to 97.8 % of the city's
+  demand; the rest is presumably wood, which has no field.
+- **Handling:** the values are kept as given.
+  **Check:** `indicator_issues` ('heat demand is not heating plus
+  hot water').
