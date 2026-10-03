@@ -1758,3 +1758,96 @@ SELECT area_kind, area_id, a.people, a.children,
        round(a.children::numeric / nullif(c.playgrounds, 0)) AS children_per_playground
   FROM access a
   LEFT JOIN counts c USING (area_kind, area_id);
+
+-- ------------------------------------------------------- other sites
+--
+-- Filled by sites.sql.
+
+-- Sites set aside for tent camps: parks, sports grounds and school
+-- yards, most likely for people left homeless by a disaster; the data
+-- does not say.
+CREATE TABLE IF NOT EXISTS tent_camp_sites (
+    id               integer PRIMARY KEY,       -- object_id
+    name             text,
+    function         text,                      -- park, sports facility, school
+    area_m2          numeric NOT NULL,          -- area_kv_m
+    source_district  text,                      -- rayon as given
+    geom             geometry(MultiPolygon, 4326) NOT NULL,
+    district_code    text REFERENCES districts(code),
+    neighbourhood_id integer REFERENCES neighbourhoods(id),
+    planning_unit_id integer REFERENCES planning_units(id),
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+
+-- Concessions for the extraction of sand, gravel and stone, granted
+-- and terminated.
+CREATE TABLE IF NOT EXISTS concessions (
+    id               text PRIMARY KEY,          -- granted-<object_id> or terminated-<object_id>
+    status           text NOT NULL CHECK (status IN ('granted', 'terminated')),
+    deposit          text,                      -- nah_1 / nahodishte
+    resource         text,                      -- pi / vid, e.g. Пясъци и чакъли
+    resource_group   text,                      -- gr / grupa_bogatstvo
+    concessionaire   text,
+    decision         text,                      -- Council of Ministers decision (РМС)
+    contract_date    text,
+    in_force_date    text,
+    term             text,                      -- e.g. "25 г."
+    register_no      text,                      -- partida_nkr in the national register
+    note             text,
+    area_m2          numeric,
+    geom             geometry(MultiPolygon, 4326) NOT NULL,
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+
+-- Land taken by the projects for new metro lines.
+CREATE TABLE IF NOT EXISTS metro_project_areas (
+    id               integer PRIMARY KEY,       -- rn
+    project          text NOT NULL,             -- which extension, from where it lies
+    approval         text NOT NULL,             -- project_name, one line
+    area_m2          numeric NOT NULL,
+    geom             geometry(MultiPolygon, 4326) NOT NULL,
+    district_code    text REFERENCES districts(code),
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+
+-- The construction boundary of Sofia city (2009) and of the other 70
+-- settlements of the municipality (2019). The settlements have no
+-- name, only the EKATTE code of the census tracts inside them.
+CREATE TABLE IF NOT EXISTS settlement_boundaries (
+    id               text PRIMARY KEY,          -- settlement-<id> or sofia
+    kind             text NOT NULL CHECK (kind IN ('Sofia city', 'settlement')),
+    ekatte           text,
+    area_ha          numeric NOT NULL,
+    geom             geometry(MultiPolygon, 4326) NOT NULL,
+    district_code    text REFERENCES districts(code),   -- the district it lies mostly in
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+
+-- Schools whose land is not theirs on paper (2018): state schools on
+-- private land, and schools with no data on who owns the land.
+CREATE TABLE IF NOT EXISTS school_property (
+    school_id        integer PRIMARY KEY REFERENCES schools(id) ON DELETE CASCADE,
+    category         text NOT NULL,
+    description      text NOT NULL,             -- the school as named in the list
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+
+-- Tent camp land per area, counted where each site's centre lies.
+CREATE OR REPLACE VIEW area_tent_camps AS
+SELECT area_kind, area_id, count(*) AS sites, round(sum(area_m2)) AS area_m2
+  FROM (SELECT 'city' AS area_kind, 'all' AS area_id, area_m2 FROM tent_camp_sites
+        UNION ALL SELECT 'district', district_code, area_m2 FROM tent_camp_sites
+        UNION ALL SELECT 'neighbourhood', neighbourhood_id::text, area_m2 FROM tent_camp_sites
+        UNION ALL SELECT 'planning_unit', planning_unit_id::text, area_m2 FROM tent_camp_sites) t
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;

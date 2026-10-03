@@ -1086,3 +1086,50 @@ class AmenitiesTest(unittest.TestCase):
         self.assertEqual(self.scalar("""
             SELECT people FROM city.area_amenity_access WHERE area_kind = 'city'"""),
             self.scalar("SELECT sum(people) FROM city.building_residents"))
+
+
+class SitesTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.tent_camp_sites").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.tent_camp_sites is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_everything_loaded(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.tent_camp_sites"), 113)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.concessions WHERE status = 'granted'"), 16)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.concessions WHERE status = 'terminated'"), 9)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.metro_project_areas"), 15)
+        # 70 settlements, one of them with no geometry, and Sofia city.
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.settlement_boundaries"), 70)
+
+    def test_every_school_property_record_found_its_school(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.school_property"), 11)
+        # A numbered name must land on a school with that number.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.school_property p JOIN city.schools s ON s.id = p.school_id
+             WHERE p.description ~ '^\\d+ '
+               AND s.number IS DISTINCT FROM substring(p.description FROM '^(\\d+) ')::integer"""), 0)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.school_property WHERE category IS NULL"), 0)
+
+    def test_tent_camps_are_placed(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.tent_camp_sites WHERE district_code IS NULL"), 0)
+        self.assertEqual(self.scalar("""
+            SELECT sites FROM city.area_tent_camps WHERE area_kind = 'city'"""), 113)
+
+    def test_metro_project_areas_lie_along_the_metro(self):
+        # Both projects extend existing lines, so every area lies
+        # within 300 m of the planned or existing tracks.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.metro_project_areas m
+             WHERE NOT EXISTS (SELECT 1 FROM city.metro_tracks t
+                                WHERE ST_DWithin(t.geom::geography, m.geom::geography, 300))"""), 0)
