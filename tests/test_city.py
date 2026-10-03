@@ -671,6 +671,11 @@ class CensusTest(unittest.TestCase):
     def test_people_total_as_in_the_source(self):
         self.assertEqual(self.scalar("SELECT sum(people) FROM city.census_addresses"), 1177165)
 
+    def test_issue_details_have_no_gaps_for_withheld_counts(self):
+        # A withheld (NULL) count left "9,  people" in the detail.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.census_issues WHERE detail LIKE '%,  %'"""), 0)
+
     def test_match_agrees_with_the_link(self):
         self.assertEqual(self.scalar("""
             SELECT count(*) FROM city.census_addresses
@@ -742,3 +747,74 @@ class BuildingExtrasTest(unittest.TestCase):
              WHERE NOT (shaded_min BETWEEN 0 AND 1 AND shaded_max BETWEEN 0 AND 1)
                 OR NOT (shaded_mean BETWEEN shaded_min AND shaded_max)
                 OR units_rated > units"""), 0)
+
+
+class IndicatorsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.planning_unit_indicators").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.planning_unit_indicators is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_every_unit_is_a_planning_unit(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.planning_unit_indicators v
+             WHERE NOT EXISTS (SELECT 1 FROM city.planning_units u WHERE u.id = v.planning_unit_id)"""), 0)
+
+    def test_every_indicator_has_values(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.indicators i
+             WHERE NOT EXISTS (SELECT 1 FROM city.planning_unit_indicators v WHERE v.indicator = i.id)"""), 0)
+
+    def test_every_row_has_a_value(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.planning_unit_indicators
+             WHERE value IS NULL AND value_text IS NULL"""), 0)
+
+    def test_percentages_out_of_range_are_reported(self):
+        out = self.scalar("""
+            SELECT count(*) FROM city.planning_unit_indicators v
+              JOIN city.indicators i ON i.id = v.indicator AND i.unit = '%'
+             WHERE v.value < 0 OR v.value > 100""")
+        self.assertEqual(out, self.scalar("""
+            SELECT count(*) FROM city.indicator_issues WHERE issue = 'percentage outside 0-100'"""))
+        self.assertLess(out, 10)
+
+    def test_shares_within_0_and_1(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.planning_unit_indicators v
+              JOIN city.indicators i ON i.id = v.indicator AND i.unit = 'share'
+             WHERE v.value < 0 OR v.value > 1"""), 0)
+
+    def test_current_division_matches_every_unit(self):
+        # Only the 2019 files, on the older division, may lose units.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.indicators
+             WHERE unmatched > 0 AND data_as_of > '2019-12-31'"""), 0)
+
+    def test_totals_as_in_the_source(self):
+        self.assertEqual(self.scalar("""
+            SELECT sum(value) FROM city.planning_unit_indicators
+             WHERE indicator = 'solid_fuel_households'"""), 51809)
+        self.assertEqual(self.scalar("""
+            SELECT sum(value) FROM city.planning_unit_indicators
+             WHERE indicator = 'residential_permits_since_2010'"""), 3575)
+
+    def test_forecast_scenarios_are_ordered(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM (
+                SELECT breakdown,
+                       sum(value) FILTER (WHERE indicator = 'population_forecast_low') lo,
+                       sum(value) FILTER (WHERE indicator = 'population_forecast') mid,
+                       sum(value) FILTER (WHERE indicator = 'population_forecast_high') hi
+                  FROM city.planning_unit_indicators GROUP BY breakdown) t
+             WHERE NOT (lo <= mid AND mid <= hi)"""), 0)

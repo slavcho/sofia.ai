@@ -1168,7 +1168,7 @@ CREATE INDEX IF NOT EXISTS census_addresses_building_idx ON census_addresses (bu
 
 CREATE OR REPLACE VIEW census_issues AS
 SELECT 'census address outside every district' AS issue, a.id AS address_id,
-       format('%s %s, %s people', a.street, a.number, a.people) AS detail, a.geom
+       format('%s %s, %s people', a.street, a.number, coalesce(a.people::text, 'withheld')) AS detail, a.geom
   FROM census_addresses a WHERE a.district_code IS NULL
 UNION ALL
 SELECT 'census address in another district than its code', a.id,
@@ -1312,3 +1312,56 @@ UNION ALL
 SELECT 'BREEAM building far from any outline', b.id::text,
        format('%s (%s)', b.title, b.stage), b.geom
   FROM breeam_buildings b WHERE b.building_id IS NULL;
+
+-- ------------------------------------------- planning unit indicators
+
+-- Sofiaplan's analyses by planning unit, about twenty datasets with a
+-- column layout each. Kept long, one row per unit, indicator and
+-- breakdown (a year, a scenario, a function), so that one table and one
+-- map code path serve them all. indicators.sql says which column of
+-- which dataset each indicator is.
+CREATE TABLE IF NOT EXISTS indicators (
+    id             text PRIMARY KEY,
+    label          text NOT NULL,
+    unit           text NOT NULL,             -- '%', 'share', 'count', 'm²', ...
+    theme          text NOT NULL,
+    description    text,
+    data_as_of     date,                      -- what the values describe
+    source_dataset text NOT NULL,
+    source_units   integer NOT NULL,          -- units in the source file
+    unmatched      integer NOT NULL           -- of them not found among ours
+);
+
+-- No foreign key to planning_units: areas.sql rebuilds those, and this
+-- table is rebuilt after it (tests check that every unit exists).
+CREATE TABLE IF NOT EXISTS planning_unit_indicators (
+    planning_unit_id integer NOT NULL,
+    indicator        text NOT NULL REFERENCES indicators(id) ON DELETE CASCADE,
+    breakdown        text NOT NULL DEFAULT '',  -- year, scenario or function
+    value            numeric,
+    value_text       text,                      -- for categories
+    match            text NOT NULL CHECK (match IN ('id', 'name', 'shape')),
+    source_fid       text NOT NULL,
+    PRIMARY KEY (planning_unit_id, indicator, breakdown)
+);
+CREATE INDEX IF NOT EXISTS planning_unit_indicators_indicator_idx
+    ON planning_unit_indicators (indicator, breakdown);
+
+CREATE OR REPLACE VIEW indicator_issues AS
+SELECT 'source units not found among the planning units' AS issue, i.id AS indicator,
+       format('%s of %s units of %s', i.unmatched, i.source_units, i.source_dataset) AS detail
+  FROM indicators i WHERE i.unmatched > 0
+UNION ALL
+SELECT 'indicator covers only part of the planning units', i.id,
+       format('%s of %s units', count(DISTINCT v.planning_unit_id),
+              (SELECT count(*) FROM planning_units))
+  FROM indicators i JOIN planning_unit_indicators v ON v.indicator = i.id
+ GROUP BY i.id
+HAVING count(DISTINCT v.planning_unit_id) < (SELECT count(*) FROM planning_units) * 0.9
+UNION ALL
+SELECT 'percentage outside 0-100', v.indicator,
+       format('%s: %s %%', u.name, round(v.value, 1))
+  FROM planning_unit_indicators v
+  JOIN indicators i ON i.id = v.indicator AND i.unit = '%'
+  LEFT JOIN planning_units u ON u.id = v.planning_unit_id
+ WHERE v.value < 0 OR v.value > 100;
