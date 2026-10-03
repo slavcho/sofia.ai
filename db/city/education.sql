@@ -110,7 +110,11 @@ INSERT INTO schools (id, name, number, admin_code, kind, funding, funding_code, 
                      geom, data_as_of, source_dataset, source_fid)
 SELECT (s.p->>'id')::integer,
        btrim(regexp_replace(s.p->>'object_nam', '\s+', ' ', 'g')),
-       (s.p->>'object_nom')::numeric::integer,
+       -- object_nom is wrong for two schools (7 for "78 СОУ", 120 for
+       -- "129 ОУ") and missing for two evening schools, so the number
+       -- the name starts with comes first.
+       coalesce(substring(btrim(s.p->>'object_nam') FROM '^(\d+) ')::integer,
+                (s.p->>'object_nom')::numeric::integer),
        nullif((s.p->>'kodadmin')::integer, 0),
        CASE s.p->>'type' WHEN '1' THEN 'primary' WHEN '2' THEN 'basic' WHEN '3' THEN 'secondary'
                          WHEN '4' THEN 'profiled' WHEN '5' THEN 'vocational' WHEN '6' THEN 'special' END,

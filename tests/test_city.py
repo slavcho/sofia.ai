@@ -240,6 +240,12 @@ class EducationTest(unittest.TestCase):
     def test_every_school_has_a_kind(self):
         self.assertEqual(self.scalar("SELECT count(*) FROM city.schools WHERE kind IS NULL"), 0)
 
+    def test_school_number_agrees_with_its_name(self):
+        # object_nom is 7 for "78 СОУ" and 120 for "129 ОУ"; the name has it right.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.schools
+             WHERE name ~ '^\d+ ' AND number IS DISTINCT FROM substring(name FROM '^(\d+) ')::integer"""), 0)
+
 
 class EducationAccessTest(unittest.TestCase):
     @classmethod
