@@ -729,3 +729,97 @@ def indicator_values(indicator: str = PathParam(pattern=r"^[a-z0-9_]+$"),
          WHERE v.indicator = %(id)s AND v.breakdown = %(breakdown)s AND v.value IS NOT NULL
            AND (%(per)s = '' OR d.value > 0)
     """, {"id": indicator, "breakdown": breakdown, "per": per})
+
+
+# The census tracts with the census 2011 and the 2019 residents summed by
+# address; shares only where at least 20 people were counted.
+@app.get("/api/census-tracts")
+def census_tracts():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', t.id,
+                   'geometry', ST_AsGeoJSON(ST_SimplifyPreserveTopology(t.geom, 0.00002), 5)::json,
+                   'properties', json_build_object(
+                       'id', t.id, 'district_code', t.district_code, 'area_km2', t.area_km2,
+                       'census_addresses', t.census_addresses, 'census_people', t.census_people,
+                       'dwellings', t.dwellings, 'age_0_14', t.age_0_14, 'age_65_plus', t.age_65_plus,
+                       'residents_2019', t.residents_2019,
+                       'share_65_plus', CASE WHEN t.census_people >= 20
+                                        THEN round(t.age_65_plus::numeric / t.census_people, 3) END,
+                       'density', round(coalesce(t.residents_2019, 0) / nullif(t.area_km2, 0)),
+                       'data_as_of', t.data_as_of)) AS feature
+          FROM census_tracts t
+    """))
+
+
+# The 2011 census in 1 km cells, only those where people live.
+@app.get("/api/population-grid")
+def population_grid():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', g.id,
+                   'geometry', ST_AsGeoJSON(g.geom, 5)::json,
+                   'properties', json_build_object(
+                       'id', g.id, 'people', g.people, 'male', g.male, 'female', g.female,
+                       'age_0_14', g.age_0_14, 'age_15_64', g.age_15_64, 'age_65_plus', g.age_65_plus,
+                       'method', g.method, 'in_sofia', g.in_sofia,
+                       'census_address_people', g.census_address_people,
+                       'residents_2019', g.residents_2019, 'data_as_of', g.data_as_of)) AS feature
+          FROM population_grid g
+         WHERE g.people > 0
+    """))
+
+
+@app.get("/api/polling-sections")
+def polling_sections():
+    return json_query(feature_collection("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', s.id::bigint,
+                   'geometry', ST_AsGeoJSON(s.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', s.id, 'district_code', s.district_code, 'number', s.number,
+                       'place', s.place, 'address', s.address,
+                       'residents_2019', s.residents_2019, 'mean_distance_m', s.mean_distance_m,
+                       'max_distance_m', s.max_distance_m, 'has_area', s.area IS NOT NULL)) AS feature
+          FROM polling_sections s
+    """))
+
+
+# One section with its area, for the card.
+@app.get("/api/polling-sections/{section_id}")
+def polling_section(section_id: str = PathParam(pattern=r"^\d{9}$")):
+    return json_query("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', s.id,
+                   'geometry', ST_AsGeoJSON(s.area, 6)::json,
+                   'properties', json_build_object(
+                       'id', s.id, 'district_code', s.district_code, 'district', d.name,
+                       'number', s.number, 'place', s.place, 'address', s.address,
+                       'lon', round(ST_X(s.geom)::numeric, 6), 'lat', round(ST_Y(s.geom)::numeric, 6),
+                       'place_district', pd.name,
+                       'residents_2019', s.residents_2019, 'mean_distance_m', s.mean_distance_m,
+                       'max_distance_m', s.max_distance_m, 'data_as_of', s.data_as_of,
+                       'area_as_of', s.area_as_of, 'source', s.source_dataset))::text
+          FROM polling_sections s
+          LEFT JOIN districts d ON d.code = s.district_code
+          LEFT JOIN districts pd ON pd.code = s.place_district_code
+         WHERE s.id = %(id)s
+    """, {"id": section_id})
+
+
+# The census tracts', the grid's and the polling sections' issues, at a
+# point; a polling section's open its card.
+@app.get("/api/small-areas/issues")
+def small_area_issues():
+    return json_query("""
+        SELECT coalesce(json_agg(json_build_object(
+                   'issue', i.issue, 'detail', i.detail,
+                   'source', CASE WHEN i.kind LIKE 'polling%%' THEN 'Elections' ELSE 'Small areas' END,
+                   'polling_section_id', CASE WHEN i.kind = 'polling_section' THEN i.id END,
+                   'layer', CASE i.kind WHEN 'census_tract' THEN 'census-tracts'
+                                        WHEN 'grid' THEN 'population-grid' ELSE 'polling-places' END,
+                   'lon', round(ST_X(ST_PointOnSurface(i.geom))::numeric, 6),
+                   'lat', round(ST_Y(ST_PointOnSurface(i.geom))::numeric, 6))
+                   ORDER BY i.kind, i.issue, i.id), '[]')::text
+          FROM small_area_issues i
+    """)

@@ -3,19 +3,22 @@
 // LLM from a question) can be checked against the layers, area kinds and
 // metrics we actually have before they are shown.
 
-const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Population', 'Buildings', 'Housing',
-                          'Planning', 'Environment', 'Technical'];
+const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Health', 'Population', 'Elections',
+                          'Buildings', 'Housing', 'Planning', 'Environment', 'Technical'];
 
 // Keys of the layer toggles in the sidebar (data-key).
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
                       'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools',
-                      'transit-stops', 'transit-routes', 'buildings'];
+                      'transit-stops', 'transit-routes', 'buildings',
+                      'census-tracts', 'population-grid', 'polling-places'];
 const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 
 // Planned parks stay off: they are master plan zones, much of it forest.
 // So does public transport: 3,500 stops and 140 lines would bury the rest,
-// and so do the 265,000 buildings.
-const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'buildings'].includes(k));
+// and so do the 265,000 buildings. The census tracts, the grid and the
+// polling places cover the whole map, so they come with their own focus.
+const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'buildings',
+                                              'census-tracts', 'population-grid', 'polling-places'].includes(k));
 
 const FOCUSES = [
   { id: 'overview', category: null, title: 'Overview',
@@ -179,6 +182,19 @@ const FOCUSES = [
     question: 'How much of each planning unit is served by the sewer network?',
     layers: [], areas: { kind: 'planning_unit', metric: 'sewer_connected_pct' },
     list: 'areas', drawer: 'open' },
+  { id: 'dkc-access', category: 'Health', title: 'Polyclinics on foot',
+    question: 'What share of residents has no district polyclinic (DKC) within walking distance?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'dkc_unserved_pct' },
+    list: 'areas', drawer: 'open' },
+  { id: 'census-tracts', category: 'Population', title: 'Census tracts',
+    question: 'How old are the people in each census tract, the smallest area the NSI publishes?',
+    layers: ['census-tracts'], areas: null, list: 'areas', drawer: 'folded', minZoom: 13 },
+  { id: 'population-grid', category: 'Population', title: 'Population in 1 km cells',
+    question: 'How many people lived in each square kilometre of Sofia and its surroundings in 2011?',
+    layers: ['population-grid'], areas: null, list: 'areas', drawer: 'folded' },
+  { id: 'polling-places', category: 'Elections', title: 'Polling places',
+    question: 'How far do voters walk to their polling place, and which section areas do not match their place?',
+    layers: ['polling-places'], areas: null, list: 'areas', drawer: 'folded', minZoom: 12 },
   { id: 'data-issues', category: 'Technical', title: 'Data issues',
     question: 'Where are the source data missing, wrong, or in disagreement with each other?',
     layers: ALL_LAYERS, areas: null, panel: 'issues',

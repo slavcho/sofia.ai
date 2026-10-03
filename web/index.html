@@ -153,6 +153,9 @@
   <label class="toggle"><input type="checkbox" data-key="transit-stops" data-layers="transit-stops"> Public transport stops</label>
   <label class="toggle"><input type="checkbox" data-key="transit-routes" data-layers="transit-routes"> Public transport lines</label>
   <label class="toggle"><input type="checkbox" data-key="buildings" data-layers="buildings-fill,buildings-line"> Buildings</label>
+  <label class="toggle"><input type="checkbox" data-key="census-tracts" data-layers="census-tracts-fill,census-tracts-line"> Census tracts</label>
+  <label class="toggle"><input type="checkbox" data-key="population-grid" data-layers="population-grid-fill,population-grid-line"> Population grid 1 km (2011)</label>
+  <label class="toggle"><input type="checkbox" data-key="polling-places" data-layers="polling-places"> Polling places</label>
   </details>
 
   <!-- Each legend shows only while one of its layers is drawn on screen. -->
@@ -189,6 +192,21 @@
   <div data-legend="schools" hidden>
   <h2>Schools</h2>
   <div id="school-legend" class="legend"></div>
+  </div>
+
+  <div data-legend="census-tracts-fill" hidden>
+  <h2>Census tracts: aged 65 and over (2011)</h2>
+  <div id="census-tract-legend" class="legend"></div>
+  </div>
+
+  <div data-legend="population-grid-fill" hidden>
+  <h2>Census 2011: people per 1 km cell</h2>
+  <div id="population-grid-legend" class="legend"></div>
+  </div>
+
+  <div data-legend="polling-places" hidden>
+  <h2>Polling places: mean walk from home</h2>
+  <div id="polling-legend" class="legend"></div>
   </div>
 
   <div data-legend="transit-stops" hidden>
@@ -364,6 +382,8 @@ const METRICS = {
                         breaks: [25, 50, 75, 95], colors: ACCESS },
   healthcare_facilities: { label: 'Healthcare facilities', indicator: 'healthcare_facilities',
                         breaks: [1, 3, 10, 30], colors: ACCESS },
+  dkc_unserved_pct:   { label: 'Residents with no polyclinic (DKC) on foot, % (Sofiaplan)', indicator: 'dkc_unserved_pct',
+                        breaks: [1, 10, 30, 60], colors: ORANGE },
 };
 for (const m of Object.values(METRICS)) if (m.indicator) m.kinds = ['planning_unit'];
 // Below this a share says more about one building than about the area.
@@ -377,6 +397,14 @@ const AREA_FILE = { district: 'regions_sofia.geojson (GIS Sofia)',
 let lines = {}, stations = null, entrances = null, parks = null, gates = null, kgs = null, schools = null;
 // The public transport loads the first time it is shown (loadTransit).
 let transitStops = null, transitRoutes = null, transitLoading = null;
+// Census tracts, the 1 km grid and the polling places load the first time
+// they are shown (loadSmall), each into the source of the same name.
+const SMALL = { 'census-tracts': '/api/census-tracts', 'population-grid': '/api/population-grid',
+                'polling-places': '/api/polling-sections' };
+const smallData = {}, smallLoading = {};
+const TRACT_BREAKS = [0.1, 0.15, 0.2, 0.25];
+const GRID_BREAKS = [100, 1000, 3000, 6000, 10000], GRID_COLORS = ['#fff5eb', ...ORANGE];
+const POLL_BREAKS = [250, 400, 600, 1000], POLL_COLORS = ['#1a9641', '#a6d96a', '#ffffbf', '#fdae61', '#d7191c'];
 // The area level and the metric they are coloured by; set by the focus.
 let areaKind = '', areaMetric = 'share_500', areaCache = {}, selection = null, allIssues = [];
 const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
@@ -406,6 +434,8 @@ map.on('load', async () => {
   map.addSource('schools', { type: 'geojson', data: sc });
   map.addSource('transit-stops', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('transit-routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  for (const key of [...Object.keys(SMALL), 'polling-area'])
+    map.addSource(key, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('buildings', { type: 'vector', minzoom: 15, maxzoom: 16,
                                tiles: [location.origin + '/api/buildings/tiles/{z}/{x}/{y}.pbf'] });
 
@@ -415,6 +445,23 @@ map.on('load', async () => {
   map.addLayer({ id: 'areas-line', type: 'line', source: 'areas',
     paint: { 'line-color': '#4a4f57', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.4, 15, 1.2] } });
   map.addLayer({ id: 'areas-selected', type: 'line', source: 'areas', filter: NOTHING,
+    paint: { 'line-color': '#d6007a', 'line-width': 3 } });
+
+  // The small areas over the areas, under the buildings and the rest.
+  map.addLayer({ id: 'population-grid-fill', type: 'fill', source: 'population-grid', layout: { visibility: 'none' },
+    paint: { 'fill-color': ['step', ['get', 'people'], ...GRID_COLORS.flatMap((c, i) => i ? [GRID_BREAKS[i - 1], c] : [c])],
+             'fill-opacity': 0.6 } });
+  map.addLayer({ id: 'population-grid-line', type: 'line', source: 'population-grid', layout: { visibility: 'none' },
+    paint: { 'line-color': '#8a6d55', 'line-width': 0.5 } });
+  map.addLayer({ id: 'census-tracts-fill', type: 'fill', source: 'census-tracts', layout: { visibility: 'none' },
+    paint: { 'fill-color': ['case', ['==', ['get', 'share_65_plus'], null], NO_DATA,
+                            ['step', ['get', 'share_65_plus'], ...PURPLE.flatMap((c, i) => i ? [TRACT_BREAKS[i - 1], c] : [c])]],
+             'fill-opacity': 0.6 } });
+  map.addLayer({ id: 'census-tracts-line', type: 'line', source: 'census-tracts', layout: { visibility: 'none' },
+    paint: { 'line-color': '#5a5470', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.2, 16, 1] } });
+  map.addLayer({ id: 'small-selected', type: 'line', source: 'census-tracts', filter: NOTHING,
+    paint: { 'line-color': '#d6007a', 'line-width': 3 } });
+  map.addLayer({ id: 'grid-selected', type: 'line', source: 'population-grid', filter: NOTHING,
     paint: { 'line-color': '#d6007a', 'line-width': 3 } });
 
   // Parks over the areas, under the metro. Planned parks are hidden at
@@ -478,6 +525,14 @@ map.on('load', async () => {
              'circle-color': ['case', ['!', ['get', 'served']], NO_DATA,
                               ['step', ['get', 'peak_per_hour'], ...STOP_COLORS.flatMap((c, i) => i ? [STOP_BREAKS[i - 1], c] : [c])]],
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  map.addLayer({ id: 'polling-area', type: 'line', source: 'polling-area',
+    paint: { 'line-color': '#d6007a', 'line-width': 2.5, 'line-dasharray': [2, 1] } });
+  map.addLayer({ id: 'polling-places', type: 'circle', source: 'polling-places', minzoom: 11,
+    layout: { visibility: 'none' },
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 2.5, 17, 7],
+             'circle-color': ['case', ['==', ['get', 'mean_distance_m'], null], NO_DATA,
+                              ['step', ['get', 'mean_distance_m'], ...POLL_COLORS.flatMap((c, i) => i ? [POLL_BREAKS[i - 1], c] : [c])]],
+             'circle-stroke-color': '#333', 'circle-stroke-width': 1 } });
   // Closed and doubtful kindergartens (and schools with no classes) are faded.
   map.addLayer({ id: 'kindergartens', type: 'circle', source: 'kindergartens', minzoom: 12,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 2.5, 17, 6],
@@ -516,11 +571,13 @@ map.on('load', async () => {
   renderEducationLegend();
   renderTransitLegend();
   renderBuildingLegend();
+  renderSmallAreaLegends();
   const tag = (list, source) => list.map(i => ({ ...i, source }));
   renderIssues([...tag(issues, 'Metro'), ...tag(areaIssues, 'Areas'), ...tag(parkIssues, 'Parks'),
                 ...tag(eduIssues, 'Kindergartens and schools'), ...tag(catchmentIssues, 'School catchments'),
                 ...tag(transitIssues, 'Public transport')]);
   getJSON('/api/buildings-issues').then(b => renderIssues([...allIssues, ...b])).catch(() => {});
+  getJSON('/api/small-areas/issues').then(b => renderIssues([...allIssues, ...b])).catch(() => {});
   bindToggles();
   paintAreas();
   bindList();
@@ -577,20 +634,38 @@ map.on('load', async () => {
     map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   }
+  map.on('click', 'polling-places', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'transit-stops'] }).length) return;
+    selectPollingSection(e.features[0].properties.id);
+  });
+  const POINTS = [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'polling-places'];
+  map.on('click', 'census-tracts-fill', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill'] }).length) return;
+    selectCensusTract(e.features[0].properties.id);
+  });
+  map.on('click', 'population-grid-fill', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill'] }).length) return;
+    selectGridCell(e.features[0].properties.id);
+  });
+  for (const id of ['polling-places', 'census-tracts-fill', 'population-grid-fill']) {
+    map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
+  }
   map.on('click', 'buildings-fill', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: POINTS }).length) return;
     selectBuilding(e.features[0].id);
   });
   map.on('mouseenter', 'buildings-fill', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'buildings-fill', () => map.getCanvas().style.cursor = '');
   map.on('click', 'areas-fill', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'parks-fill', 'buildings-fill'] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill', 'population-grid-fill'] }).length) return;
     selectArea(areaKind, e.features[0].properties.id);
   });
 
   // ?station=<id>, ?entrance=<id>, ?park=<id>, ?park_entrance=<id>,
   // ?kindergarten=<id>, ?school=<id>, ?transit_stop=<id>,
-  // ?transit_route=<id>, ?building=<id> or ?area=<kind>:<id> opens the page
+  // ?transit_route=<id>, ?building=<id>, ?polling_section=<id>,
+  // ?census_tract=<id>, ?grid_cell=<id> or ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   applyFocus(q.get('focus') || 'overview');
@@ -603,6 +678,9 @@ map.on('load', async () => {
   else if (q.has('transit_stop')) selectTransitStop(q.get('transit_stop'), false);
   else if (q.has('transit_route')) selectTransitRoute(q.get('transit_route'), false);
   else if (q.has('building')) selectBuilding(+q.get('building'), false);
+  else if (q.has('polling_section')) selectPollingSection(q.get('polling_section'), false);
+  else if (q.has('census_tract')) selectCensusTract(q.get('census_tract'), false);
+  else if (q.has('grid_cell')) selectGridCell(q.get('grid_cell'), false);
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
@@ -728,6 +806,107 @@ function loadTransit() {
     .catch(err => { transitLoading = null; throw err; });
 }
 
+function loadSmall(key) {
+  return smallLoading[key] ||= getJSON(SMALL[key])
+    .then(fc => { smallData[key] = fc; map.getSource(key).setData(fc); return fc; })
+    .catch(err => { smallLoading[key] = null; throw err; });
+}
+
+function renderSmallAreaLegends() {
+  const legend = (breaks, colors, fmt) => colors.map((c, i) =>
+    `<span><i class="swatch" style="background:${c}"></i>${i === 0 ? '< ' + fmt(breaks[0])
+      : i === colors.length - 1 ? '≥ ' + fmt(breaks[i - 1]) : fmt(breaks[i - 1]) + '–' + fmt(breaks[i])}</span>`).join('');
+  document.getElementById('census-tract-legend').innerHTML = legend(TRACT_BREAKS, PURPLE, pct) +
+    `<span><i class="swatch" style="background:${NO_DATA}"></i>&lt; 20 people counted</span>`;
+  document.getElementById('population-grid-legend').innerHTML = legend(GRID_BREAKS, GRID_COLORS, num);
+  document.getElementById('polling-legend').innerHTML = legend(POLL_BREAKS, POLL_COLORS, v => num(v) + ' m') +
+    `<span><i class="dot" style="background:${NO_DATA}"></i>no section area</span>`;
+}
+
+function clearSmallSelection() {
+  map.setFilter('small-selected', NOTHING);
+  map.setFilter('grid-selected', NOTHING);
+  map.getSource('polling-area').setData({ type: 'FeatureCollection', features: [] });
+}
+
+// Turns a layer on (and so loads it) for a card opened from the URL or a list.
+function showLayer(key) {
+  const cb = document.querySelector(`input[data-key="${key}"]`);
+  if (!cb.checked) cb.click();
+  return loadSmall(key);
+}
+
+async function selectPollingSection(id, animate) {
+  const [f] = await Promise.all([getJSON('/api/polling-sections/' + id), showLayer('polling-places')]);
+  const p = f.properties;
+  select('polling_section', id);
+  highlight([[p.lon, p.lat]]);
+  if (f.geometry) {
+    map.getSource('polling-area').setData(f);
+    map.fitBounds(bboxOf(f.geometry), { padding: 60, maxZoom: 16, animate: animate !== false });
+  } else moveTo([p.lon, p.lat], 15, animate);
+  document.getElementById('info').innerHTML = `
+    <h3>Polling section ${esc(p.id)}</h3>
+    <div>${esc(p.place || p.address || '—')}</div>
+    <dl>
+      <dt>Address</dt><dd>${esc(p.address || '—')}</dd>
+      <dt>District</dt><dd>${esc(p.district || p.district_code)}, section ${p.number}
+        ${p.place_district && p.place_district !== p.district ? `<span class="sub">(the place is in ${esc(p.place_district)})</span>` : ''}</dd>
+      <dt>Residents 2019</dt><dd>${num(p.residents_2019)}
+        <span class="sub">(living in the section's area, outlined)</span></dd>
+      <dt>Walk from home</dt><dd>${p.mean_distance_m == null ? '— <span class="sub">(no area in the division)</span>'
+        : `${num(p.mean_distance_m)} m on average, ${num(p.max_distance_m)} m at most <span class="sub">(straight line)</span>`}</dd>
+      <dt>Data as of</dt><dd>election ${esc(p.data_as_of)}; areas ${esc(p.area_as_of ?? '—')}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}, electoral_division-zip</dd>
+    </dl>`;
+}
+
+async function selectCensusTract(id, animate) {
+  const fc = await showLayer('census-tracts');
+  const f = fc.features.find(f => f.properties.id === id); if (!f) return;
+  const p = f.properties;
+  select('census_tract', id);
+  map.setFilter('small-selected', ['==', ['get', 'id'], id]);
+  if (animate !== undefined) map.fitBounds(bboxOf(f.geometry), { padding: 80, maxZoom: 16, animate: animate !== false });
+  const share = v => p.census_people ? ` <span class="sub">(${pct(v / p.census_people)})</span>` : '';
+  document.getElementById('info').innerHTML = `
+    <h3>Census tract ${esc(p.id)}</h3>
+    <div class="sub">District code ${esc(p.district_code)}, ${num(p.area_km2)} km²</div>
+    <dl>
+      <dt>Census 2011</dt><dd>${num(p.census_people)} people at ${num(p.census_addresses)} addresses,
+        ${num(p.dwellings)} dwellings</dd>
+      <dt>Aged 0–14</dt><dd>${num(p.age_0_14)}${share(p.age_0_14)}</dd>
+      <dt>Aged 65+</dt><dd>${num(p.age_65_plus)}${share(p.age_65_plus)}</dd>
+      <dt>Residents 2019</dt><dd>${num(p.residents_2019)} <span class="sub">(${num(p.density)} per km²)</span></dd>
+      <dt>Note</dt><dd class="sub">The NSI publishes only the outlines; the counts are the census
+        addresses and the 2019 residents by building inside each (or within 50 m).</dd>
+      <dt>Source</dt><dd>nsi-census-tracts</dd>
+    </dl>`;
+}
+
+async function selectGridCell(id, animate) {
+  const fc = await showLayer('population-grid');
+  const f = fc.features.find(f => f.properties.id === id); if (!f) return;
+  const p = f.properties;
+  select('grid_cell', id);
+  map.setFilter('grid-selected', ['==', ['get', 'id'], id]);
+  if (animate !== undefined) map.fitBounds(bboxOf(f.geometry), { padding: 80, maxZoom: 14, animate: animate !== false });
+  const share = v => p.people ? ` <span class="sub">(${pct(v / p.people)})</span>` : '';
+  document.getElementById('info').innerHTML = `
+    <h3>1 km cell ${esc(p.id)}</h3>
+    <div class="sub">${p.in_sofia ? 'Sofia municipality' : 'outside Sofia municipality'}</div>
+    <dl>
+      <dt>Census 2011</dt><dd>${num(p.people)} people <span class="sub">(${num(p.male)} men, ${num(p.female)} women)</span></dd>
+      <dt>Aged 0–14</dt><dd>${num(p.age_0_14)}${share(p.age_0_14)}</dd>
+      <dt>Aged 15–64</dt><dd>${num(p.age_15_64)}${share(p.age_15_64)}</dd>
+      <dt>Aged 65+</dt><dd>${num(p.age_65_plus)}${share(p.age_65_plus)}</dd>
+      ${p.in_sofia ? `<dt>By address</dt><dd>${num(p.census_address_people)} census people,
+        ${num(p.residents_2019)} residents 2019 <span class="sub">(our addresses inside the cell)</span></dd>` : ''}
+      <dt>Method</dt><dd>${esc(p.method || '—')}</dd>
+      <dt>Source</dt><dd>NSI 2011 census, 1 km grid (data as of ${esc(p.data_as_of)})</dd>
+    </dl>`;
+}
+
 function renderIssues(all) {
   allIssues = all;
   const filter = document.getElementById('issue-source');
@@ -762,11 +941,13 @@ function openIssue(i) {
   else if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
   else if (i.stop_id) selectTransitStop(i.stop_id); else if (i.route_id) selectTransitRoute(i.route_id);
   else if (i.building_id) selectBuilding(i.building_id);
-  // Census addresses and buildings without an outline: just the place.
+  else if (i.polling_section_id) selectPollingSection(i.polling_section_id);
+  // Census addresses, buildings without an outline, small areas: just the
+  // place, with the layer it belongs to shown.
   else if (i.lon != null) {
     clearSelection();
-    if (!document.querySelector('input[data-key="buildings"]').checked)
-      document.querySelector('input[data-key="buildings"]').click();
+    const cb = document.querySelector(`input[data-key="${i.layer || 'buildings'}"]`);
+    if (!cb.checked) cb.click();
     highlight([[i.lon, i.lat]]); moveTo([i.lon, i.lat], 17);
   }
 }
@@ -784,6 +965,7 @@ function bindToggles() {
     cb.dataset.layers.split(',').forEach(id =>
       map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none'));
     if (cb.checked && cb.dataset.key.startsWith('transit')) loadTransit().catch(() => {});
+    if (cb.checked && SMALL[cb.dataset.key]) loadSmall(cb.dataset.key).catch(() => {});
   });
   document.getElementById('show-planned').onchange = e => {
     const f = e.target.checked ? null : ['==', ['get', 'status'], 'existing'];
@@ -856,6 +1038,7 @@ function select(kind, id) {
   if (kind !== 'park') map.setFilter('parks-selected', NOTHING);
   if (kind !== 'transit_route') map.setFilter('transit-routes-selected', NOTHING);
   if (kind !== 'building') map.setFilter('buildings-selected', NOTHING);
+  clearSmallSelection();
   showCatchment([]);
 }
 
@@ -870,6 +1053,7 @@ function clearSelection() {
   map.setFilter('parks-selected', NOTHING);
   map.setFilter('transit-routes-selected', NOTHING);
   map.setFilter('buildings-selected', NOTHING);
+  clearSmallSelection();
   document.getElementById('selected').hidden = true;
   document.getElementById('info').innerHTML = '';
 }
