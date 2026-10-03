@@ -1108,3 +1108,61 @@ interpreted by `db/city/transit.sql`.
   share on the map can be above 100 %.
   **Check:** `indicator_issues` ('district heating supplies more than
   the heat demand').
+
+## Street lighting
+
+### 86. The lighting survey numbers the districts alphabetically
+
+- **Status:** handled.
+- **What:** `area` in the luminaire and control panel files is 01 to
+  24, but 01 is Банкя and 24 Триадица: the districts in alphabetical
+  order, not their codes (01 is Средец). Taken as codes, 95 % of the
+  lights lay in another district.
+- **Handling:** `lighting.sql` translates the numbers; then 1,276
+  lights still lie in another district, a median of 9 m from the one
+  they are coded for. Only those more than 100 m inside another
+  district are listed (108).
+  **Check:** `lighting_issues` ('street light coded for another
+  district').
+
+### 87. 5,192 street lights have no district
+
+- **Status:** flagged.
+- **What:** `area` is empty for 5,191 luminaires and "51" for one.
+  One light lies outside every district.
+- **Handling:** the district, neighbourhood and planning unit are taken
+  from where the light lies, so they are counted all the same.
+  **Check:** `lighting_issues` ('street light without a district
+  code', 'street light outside every district').
+
+### 88. Lamp types with two more fields run into them
+
+- **Status:** handled.
+- **What:** 29 luminaires have `lighttype` like "НЛВН|12|84"; what the
+  numbers are is not said (perhaps a lamp count and wattage). 825 have
+  "Неопределен" or "Няма данни".
+- **Handling:** the type before the bar is used; the abbreviations are
+  read as high-pressure sodium (НЛВН), mercury vapour (ЖЛВН), compact
+  fluorescent (КЛЛ), metal halide (МХЛ), incandescent (ЛНЖ),
+  fluorescent (ЛЛК) and low-pressure sodium (НЛНН).
+  **Check:** `lighting_issues` ('lamp type with extra fields').
+
+### 89. Light pole heights of 0 and up to 322 m
+
+- **Status:** handled.
+- **What:** `height` is in cm (the median pole is 7 m). 710 poles have
+  0 and 144 more than 30 m, up to 32,197 cm.
+- **Handling:** both are taken as not given (`height_m` NULL); the
+  height as given is kept in `height_source`.
+  **Check:** `lighting_issues` ('light pole height out of range').
+
+### 90. Not loaded: the cables, manholes, panel power and the field survey
+
+- **Status:** not loaded.
+- **What:** the street lighting cables (140 overhead, 44 underground)
+  and manholes (55) cover a few streets of a network of ~98,000
+  lights. The control panels' installed power (`installpow`) is 0 for
+  1,039 of 1,043. The field survey for the Simeonovo-Krastova analysis
+  has 553 points with one code, 2OST1, and no explanation.
+- **Handling:** none of it is in `city`; ask the municipality whether
+  a full network survey exists.
