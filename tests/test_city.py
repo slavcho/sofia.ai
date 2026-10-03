@@ -1009,3 +1009,74 @@ class MasterPlanTest(unittest.TestCase):
               JOIN (SELECT area_id, sum(area_ha) AS ha FROM city.area_master_plan
                      WHERE area_kind = 'district' GROUP BY 1) m ON m.area_id = d.code
              WHERE m.ha * 1e4 NOT BETWEEN 0.8 * ST_Area(d.geom::geography) AND 1.005 * ST_Area(d.geom::geography)"""), 0)
+
+
+class AmenitiesTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.playgrounds").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.playgrounds is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_everything_loaded(self):
+        # 1839 in the register, less the 12 it says not to show.
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.playgrounds"), 1827)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.playgrounds WHERE status = 'planned'"), 56)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.markets"), 33)
+
+    def test_hidden_playgrounds_left_out(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.playgrounds p
+              JOIN urban.features f ON f.source_fid = p.source_fid
+              JOIN urban.layers l ON l.id = f.layer_id
+              JOIN urban.resources r ON r.id = l.resource_id
+              JOIN urban.datasets d ON d.id = r.dataset_id AND d.name = p.source_dataset
+             WHERE f.properties->>'chek' ~ 'да не се показва'"""), 0)
+
+    def test_source_district_agrees_with_location(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.playgrounds p JOIN city.districts d ON d.code = p.district_code
+             WHERE lower(replace(p.source_district, 'Бнакя', 'Банкя')) <> lower(d.name)"""), 0)
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.markets m JOIN city.districts d ON d.code = m.district_code
+             WHERE lower(m.source_district) <> lower(d.name)"""), 0)
+
+    def test_every_inhabited_building_measured(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_residents b
+              LEFT JOIN city.building_amenity_access a ON a.building_id = b.id
+             WHERE a.playground_m IS NULL OR a.market_m IS NULL"""), 0)
+
+    def test_nearest_is_really_nearest(self):
+        # The index search looks at 5 candidates only; check it against
+        # every playground and market for a sample of buildings.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM (
+                SELECT a.playground_m, a.market_m,
+                       (SELECT min(ST_Distance(p.geom::geography, b.geom::geography))
+                          FROM city.playgrounds p WHERE p.status = 'existing') AS pd,
+                       (SELECT min(ST_Distance(m.geom::geography, b.geom::geography))
+                          FROM city.markets m) AS md
+                  FROM city.building_residents b
+                  JOIN city.building_amenity_access a ON a.building_id = b.id
+                 WHERE b.id % 100 = 0) s
+             WHERE abs(playground_m - pd) > 1 OR abs(market_m - md) > 1"""), 0)
+
+    def test_area_counts_add_up(self):
+        self.assertEqual(self.scalar("""
+            SELECT sum(playgrounds) FROM city.area_amenity_access WHERE area_kind = 'district'"""),
+            self.scalar("""SELECT count(*) FROM city.playgrounds
+                            WHERE status = 'existing' AND district_code IN
+                                  (SELECT area_id FROM city.area_amenity_access WHERE area_kind = 'district')"""))
+        self.assertEqual(self.scalar("""
+            SELECT people FROM city.area_amenity_access WHERE area_kind = 'city'"""),
+            self.scalar("SELECT sum(people) FROM city.building_residents"))

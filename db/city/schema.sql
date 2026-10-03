@@ -1654,3 +1654,107 @@ CREATE TABLE IF NOT EXISTS area_master_plan (
     area_ha          numeric NOT NULL,
     PRIMARY KEY (area_kind, area_id, zone_group)
 );
+
+-- ------------------------------------------------------- playgrounds and markets
+--
+-- The municipal register of playgrounds, from the programme for their
+-- repair, and the municipal markets. Filled by amenities.sql.
+CREATE TABLE IF NOT EXISTS playgrounds (
+    id               integer PRIMARY KEY,
+    number           text,                      -- nobekt_new: district number and object, e.g. 06.129
+    location         text,                      -- new_mestopolozh
+    status           text NOT NULL CHECK (status IN ('existing', 'planned')),
+    measure          text,                      -- major repair, partial repair, new, planned
+    managed_by       text,                      -- stopanin: district or green system directorate
+    ownership        text,                      -- new_sobstvenos as given
+    age_groups       text,                      -- new_vazrgrupi, e.g. "0 до 3; 3 до 12"
+    area_m2          numeric,                   -- new_plost when it is one number
+    area_source      text,                      -- new_plost as given; some read "200/ 150"
+    meets_regulation boolean,                   -- new_naredba1: complies with Наредба 1 (2009)
+    shade            boolean,
+    built            text,                      -- new_izgrazhdane: a year, a decade or "before 1989"
+    equipment        jsonb,                     -- counts: swings, rockers, climbing frames...
+    note             text,
+    source_district  text,                      -- raion as given
+    geom             geometry(Point, 4326) NOT NULL,
+    district_code    text REFERENCES districts(code),
+    neighbourhood_id integer REFERENCES neighbourhoods(id),
+    planning_unit_id integer REFERENCES planning_units(id),
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS playgrounds_geom_idx ON playgrounds USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS markets (
+    id               integer PRIMARY KEY,
+    name             text NOT NULL,
+    operator         text,                      -- pazari: the municipal company
+    address          text,
+    website          text,
+    note             text,
+    source_district  text,                      -- rayon as given
+    geom             geometry(Point, 4326) NOT NULL,
+    district_code    text REFERENCES districts(code),
+    neighbourhood_id integer REFERENCES neighbourhoods(id),
+    planning_unit_id integer REFERENCES planning_units(id),
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+
+-- Straight-line distance from every inhabited building to the nearest
+-- existing playground and the nearest market, as for the parks.
+CREATE TABLE IF NOT EXISTS building_amenity_access (
+    building_id      integer PRIMARY KEY REFERENCES building_residents(id) ON DELETE CASCADE,
+    playground_id    integer REFERENCES playgrounds(id) ON DELETE SET NULL,
+    playground_m     numeric,
+    market_id        integer REFERENCES markets(id) ON DELETE SET NULL,
+    market_m         numeric
+);
+
+-- Residents within 300 m of a playground (children 0-14 counted too)
+-- and within 1 km of a market, and the playgrounds and markets in each area.
+CREATE OR REPLACE VIEW area_amenity_access AS
+WITH b AS (
+    SELECT r.people, coalesce(r.age_0_14, 0) AS children, r.district_code, r.neighbourhood_id,
+           r.planning_unit_id, a.playground_m, a.market_m
+      FROM building_residents r
+      JOIN building_amenity_access a ON a.building_id = r.id
+), levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, b.* FROM b
+    UNION ALL SELECT 'district', b.district_code, b.* FROM b
+    UNION ALL SELECT 'neighbourhood', b.neighbourhood_id::text, b.* FROM b
+    UNION ALL SELECT 'planning_unit', b.planning_unit_id::text, b.* FROM b
+), access AS (
+    SELECT area_kind, area_id, sum(people) AS people, sum(children) AS children,
+           coalesce(sum(people) FILTER (WHERE playground_m <= 300), 0) AS playground_within_300,
+           coalesce(sum(children) FILTER (WHERE playground_m <= 300), 0) AS children_playground_within_300,
+           coalesce(sum(people) FILTER (WHERE market_m <= 1000), 0) AS market_within_1000
+      FROM levels
+     WHERE area_id IS NOT NULL
+     GROUP BY area_kind, area_id
+), p AS (
+    SELECT * FROM playgrounds WHERE status = 'existing'
+), counts AS (
+    SELECT area_kind, area_id, sum(playgrounds)::integer AS playgrounds, sum(markets)::integer AS markets
+      FROM (SELECT 'city' AS area_kind, 'all' AS area_id, count(*) AS playgrounds, 0 AS markets FROM p
+            UNION ALL SELECT 'district', district_code, count(*), 0 FROM p GROUP BY 2
+            UNION ALL SELECT 'neighbourhood', neighbourhood_id::text, count(*), 0 FROM p GROUP BY 2
+            UNION ALL SELECT 'planning_unit', planning_unit_id::text, count(*), 0 FROM p GROUP BY 2
+            UNION ALL SELECT 'city', 'all', 0, count(*) FROM markets
+            UNION ALL SELECT 'district', district_code, 0, count(*) FROM markets GROUP BY 2
+            UNION ALL SELECT 'neighbourhood', neighbourhood_id::text, 0, count(*) FROM markets GROUP BY 2
+            UNION ALL SELECT 'planning_unit', planning_unit_id::text, 0, count(*) FROM markets GROUP BY 2) c
+     WHERE area_id IS NOT NULL
+     GROUP BY area_kind, area_id
+)
+SELECT area_kind, area_id, a.people, a.children,
+       coalesce(c.playgrounds, 0) AS playgrounds, coalesce(c.markets, 0) AS markets,
+       a.playground_within_300, a.children_playground_within_300, a.market_within_1000,
+       round(a.playground_within_300::numeric / nullif(a.people, 0), 3) AS playground_share_300,
+       round(a.children_playground_within_300::numeric / nullif(a.children, 0), 3) AS children_playground_share_300,
+       round(a.market_within_1000::numeric / nullif(a.people, 0), 3) AS market_share_1000,
+       round(a.children::numeric / nullif(c.playgrounds, 0)) AS children_per_playground
+  FROM access a
+  LEFT JOIN counts c USING (area_kind, area_id);
