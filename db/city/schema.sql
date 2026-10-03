@@ -1497,3 +1497,132 @@ UNION ALL
 SELECT 'section area without a polling place', 'polling_area', u.district_code || '-' || u.number,
        format('section %s in district %s (%s)', u.number, u.district_code, u.place), ST_PointOnSurface(u.geom)
   FROM polling_areas_unplaced u;
+
+-- ------------------------------------------------------- street lighting
+--
+-- The municipality's survey of the street lighting (DTI, 2017-11-01)
+-- and Sofia Electric Transport's rectifier stations. Filled by
+-- lighting.sql. Districts and planning units are where the point lies;
+-- the survey's own district ("area") is kept to check against it.
+CREATE TABLE IF NOT EXISTS street_lights (
+    id               integer PRIMARY KEY,       -- id in the source
+    pole_id          text,                      -- bankid: the pole it is on
+    lamp_type        text,                      -- in English; NULL: not given
+    lamp_type_source text,                      -- lighttype as given
+    lamps            integer,                   -- numberofli
+    condition        text CHECK (condition IN ('excellent', 'very good', 'good', 'poor', 'very poor')),
+    working          boolean,                   -- bankwork
+    mount            text,                      -- banktype: pole, park pole, facade, tunnel...
+    electronic_ballast boolean,                 -- pratype
+    voltage          text,
+    source_district_code text,                  -- area, translated to a district code
+    geom             geometry(Point, 4326) NOT NULL,
+    district_code    text,
+    neighbourhood_id integer,
+    planning_unit_id integer,
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS street_lights_geom_idx ON street_lights USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS light_poles (
+    id               integer PRIMARY KEY,       -- id in the source
+    pole_id          text,                      -- poleid
+    height_m         numeric,                   -- NULL: not given, 0 or above 30 m
+    height_source    text,                      -- height as given, in cm
+    material         text,                      -- steel tube, reinforced concrete, wood
+    owner            text,                      -- poleowner as given
+    marked           boolean,
+    attached         text,                      -- facility: advertising, GSM, other
+    geom             geometry(Point, 4326) NOT NULL,
+    district_code    text,
+    planning_unit_id integer,
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS light_poles_geom_idx ON light_poles USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS lighting_panels (
+    id               integer PRIMARY KEY,       -- id in the source
+    box_id           text,
+    address          text,
+    condition        text CHECK (condition IN ('excellent', 'very good', 'good', 'poor', 'very poor')),
+    photocell        boolean,                   -- switched by daylight
+    radio_control    boolean,
+    clock_control    boolean,                   -- watchcontr
+    manual_control   boolean,
+    source_district_code text,
+    geom             geometry(Point, 4326) NOT NULL,
+    district_code    text,
+    planning_unit_id integer,
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lighting_panels_geom_idx ON lighting_panels USING gist (geom);
+
+-- Traction rectifier stations (ТИС) feeding the trams and trolleybuses.
+CREATE TABLE IF NOT EXISTS rectifier_stations (
+    id               integer PRIMARY KEY,
+    name             text NOT NULL,
+    built            text,                      -- godina: a year or a range
+    address          text,
+    geom             geometry(Point, 4326) NOT NULL,
+    district_code    text,
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+
+CREATE OR REPLACE VIEW lighting_issues AS
+SELECT 'street light outside every district' AS issue, 'street_light' AS kind, s.id::text AS id,
+       concat_ws(', ', s.lamp_type_source, s.mount) AS detail, s.geom
+  FROM street_lights s WHERE s.district_code IS NULL
+UNION ALL
+-- Along the boundaries the survey and the district outlines often
+-- disagree by a few metres; only lights well inside another district
+-- are listed.
+SELECT 'street light coded for another district', 'street_light', s.id::text,
+       format('coded %s, lies in %s, %s m from it', s.source_district_code, s.district_code,
+              round(ST_Distance(s.geom::geography, d.geom::geography))), s.geom
+  FROM street_lights s JOIN districts d ON d.code = s.source_district_code
+ WHERE s.source_district_code <> s.district_code
+   AND NOT ST_DWithin(s.geom::geography, d.geom::geography, 100)
+UNION ALL
+SELECT 'street light without a district code', 'street_light', s.id::text,
+       concat_ws(', ', s.lamp_type_source, s.mount), s.geom
+  FROM street_lights s WHERE s.source_district_code IS NULL
+UNION ALL
+SELECT 'lamp type with extra fields', 'street_light', s.id::text, s.lamp_type_source, s.geom
+  FROM street_lights s WHERE s.lamp_type_source LIKE '%|%'
+UNION ALL
+SELECT 'light pole height out of range', 'light_pole', p.id::text,
+       format('%s cm', p.height_source), p.geom
+  FROM light_poles p WHERE p.height_source ~ '^\d+$' AND p.height_source::integer > 3000
+UNION ALL
+SELECT 'lighting panel coded for another district', 'lighting_panel', p.id::text,
+       format('%s: area %s, lies in %s', coalesce(p.address, p.box_id), p.source_district_code, p.district_code), p.geom
+  FROM lighting_panels p
+ WHERE p.source_district_code IS NOT NULL AND p.source_district_code <> p.district_code;
+
+CREATE OR REPLACE VIEW area_lighting AS
+WITH levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, s.* FROM street_lights s
+    UNION ALL SELECT 'district', s.district_code, s.* FROM street_lights s
+    UNION ALL SELECT 'neighbourhood', s.neighbourhood_id::text, s.* FROM street_lights s
+    UNION ALL SELECT 'planning_unit', s.planning_unit_id::text, s.* FROM street_lights s
+)
+SELECT area_kind, area_id,
+       count(*) AS street_lights,
+       sum(lamps) AS lamps,
+       round(count(*) FILTER (WHERE lamp_type = 'LED')::numeric
+             / nullif(count(lamp_type), 0), 4) AS led_share,
+       round(count(*) FILTER (WHERE condition IN ('poor', 'very poor'))::numeric
+             / nullif(count(condition), 0), 4) AS poor_share,
+       round(count(*) FILTER (WHERE NOT working)::numeric
+             / nullif(count(working), 0), 4) AS not_working_share
+  FROM levels
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;

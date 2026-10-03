@@ -920,3 +920,53 @@ class SmallAreasTest(unittest.TestCase):
         self.assertEqual(self.scalar("""
             SELECT count(*) FROM city.polling_sections
              WHERE place = '' OR place ~ '^(гр|с)\\.' OR address LIKE '%' || chr(13) || '%'"""), 0)
+
+
+class LightingTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.street_lights").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.street_lights is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_everything_loaded(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.street_lights"), 98225)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.light_poles"), 86286)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.lighting_panels"), 1043)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.rectifier_stations"), 24)
+
+    def test_survey_district_numbering_is_translated(self):
+        # Numbered alphabetically in the survey; translated, nearly all
+        # lights lie in the district they are coded for.
+        self.assertGreater(self.scalar("""
+            SELECT count(*) FILTER (WHERE source_district_code = district_code)::float
+                   / count(source_district_code) FROM city.street_lights"""), 0.98)
+
+    def test_lamp_types_known(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.street_lights
+             WHERE lamp_type IS NULL AND split_part(lamp_type_source, '|', 1)
+                   NOT IN ('Неопределен', 'Няма данни')"""), 0)
+
+    def test_led_lights(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.street_lights WHERE lamp_type = 'LED'"), 4703)
+
+    def test_pole_heights_plausible(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.light_poles WHERE height_m <= 0 OR height_m > 30"""), 0)
+
+    def test_area_lighting_adds_up(self):
+        self.assertEqual(self.scalar("""
+            SELECT sum(street_lights) FROM city.area_lighting WHERE area_kind = 'district'"""),
+            self.scalar("SELECT count(*) FROM city.street_lights WHERE district_code IS NOT NULL"))
+        self.assertGreater(self.scalar("""
+            SELECT sum(street_lights) FROM city.area_lighting WHERE area_kind = 'planning_unit'"""), 95000)
