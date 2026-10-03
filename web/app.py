@@ -454,6 +454,43 @@ def building_tiles(z: int = PathParam(ge=15, le=22), x: int = PathParam(ge=0), y
                      headers={"Cache-Control": "max-age=3600"})
 
 
+@app.get("/api/master-plan/tiles/{z}/{x}/{y}.pbf")
+def master_plan_tiles(z: int = PathParam(ge=11, le=22), x: int = PathParam(ge=0), y: int = PathParam(ge=0)):
+    # 12,700 zones are 5.7 MB of GeoJSON, so vector tiles like the buildings.
+    with psycopg.connect(DSN, options="-c search_path=city,public") as conn:
+        (body,) = conn.execute("""
+            WITH t AS (SELECT ST_TileEnvelope(%(z)s, %(x)s, %(y)s) AS env),
+            z AS (
+              SELECT z.id, z.plan, z.code, z.name, z.zone_group, z.special_rules, z.area_ha,
+                     ST_AsMVTGeom(ST_Transform(z.geom, 3857), t.env, 4096, 16) AS geom
+                FROM master_plan_zones z
+               CROSS JOIN t
+               WHERE z.geom && ST_Transform(t.env, 4326))
+            SELECT ST_AsMVT(z, 'zones', 4096, 'geom', 'id') FROM z
+        """, {"z": z, "x": x, "y": y}).fetchone()
+    return Response(content=bytes(body or b""), media_type="application/vnd.mapbox-vector-tile",
+                     headers={"Cache-Control": "max-age=3600"})
+
+
+# One zone with its outline and the district it is mostly in, for the card.
+@app.get("/api/master-plan/zones/{zone_id}")
+def master_plan_zone(zone_id: int):
+    return json_query("""
+        SELECT json_build_object(
+                   'type', 'Feature', 'id', z.id,
+                   'geometry', ST_AsGeoJSON(z.geom, 6)::json,
+                   'properties', json_build_object(
+                       'id', z.id, 'plan', z.plan, 'code', z.code, 'name', z.name,
+                       'zone_group', z.zone_group, 'special_rules', z.special_rules,
+                       'area_ha', z.area_ha,
+                       'district', (SELECT d.name FROM districts d
+                                     WHERE ST_Intersects(d.geom, ST_PointOnSurface(z.geom)) LIMIT 1),
+                       'data_as_of', z.data_as_of,
+                       'source', z.source_dataset || ' #' || z.source_fid))::text
+          FROM master_plan_zones z WHERE z.id = %(id)s
+    """, {"id": zone_id})
+
+
 @app.get("/api/buildings/{building_id}")
 def building(building_id: int):
     # One outline of the cadastral plan with everything tied to it: the
@@ -613,7 +650,9 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'floor_area_per_resident', round(b.floor_area_m2 / nullif(a.population, 0)),
                        'lights_per_km2', round(l.street_lights / nullif(a.area_km2, 0)),
                        'light_led_share', l.led_share, 'light_poor_share', l.poor_share,
-                       'light_not_working_share', l.not_working_share)) AS feature
+                       'light_not_working_share', l.not_working_share,
+                       'plan_residential_share', p.residential_share, 'plan_green_share', p.green_share,
+                       'plan_production_share', p.production_share)) AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
@@ -635,6 +674,15 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                  ON b.area_kind = %(kind)s AND b.area_id = a.{a['key']}::text
           LEFT JOIN area_lighting l
                  ON l.area_kind = %(kind)s AND l.area_id = a.{a['key']}::text
+          LEFT JOIN (SELECT area_id,
+                            round(sum(area_ha) FILTER (WHERE zone_group IN ('residential', 'central', 'mixed'))
+                                  / sum(area_ha), 4) AS residential_share,
+                            round(sum(area_ha) FILTER (WHERE zone_group IN ('green', 'forest and nature'))
+                                  / sum(area_ha), 4) AS green_share,
+                            round(sum(area_ha) FILTER (WHERE zone_group = 'production') / sum(area_ha), 4)
+                                  AS production_share
+                       FROM area_master_plan WHERE area_kind = %(kind)s GROUP BY area_id) p
+                 ON p.area_id = a.{a['key']}::text
          ORDER BY a.{a['key']}
     """), {"kind": kind})
 
@@ -678,6 +726,10 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                 WHERE n.area_kind = %(kind)s AND n.area_id = a.{a['key']}::text),
                     'buildings', (SELECT row_to_json(b) FROM area_buildings b
                                    WHERE b.area_kind = %(kind)s AND b.area_id = a.{a['key']}::text),
+                    'master_plan', (SELECT json_agg(json_build_object('group', m.zone_group, 'area_ha', m.area_ha)
+                                                   ORDER BY m.area_ha DESC)
+                                      FROM area_master_plan m
+                                     WHERE m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text),
                     'lighting', (SELECT row_to_json(l) FROM area_lighting l
                                   WHERE l.area_kind = %(kind)s AND l.area_id = a.{a['key']}::text),
                     'indicators', (SELECT json_agg(json_build_object(

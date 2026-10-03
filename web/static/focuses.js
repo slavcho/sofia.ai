@@ -10,7 +10,7 @@ const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Health', 'P
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
                       'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools',
                       'transit-stops', 'transit-routes', 'buildings',
-                      'census-tracts', 'population-grid', 'polling-places', 'rectifier-stations'];
+                      'census-tracts', 'population-grid', 'polling-places', 'rectifier-stations', 'master-plan'];
 const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 
 // Planned parks stay off: they are master plan zones, much of it forest.
@@ -19,7 +19,7 @@ const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 // polling places cover the whole map, so they come with their own focus.
 const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'buildings',
                                               'census-tracts', 'population-grid', 'polling-places',
-                                              'rectifier-stations'].includes(k));
+                                              'rectifier-stations', 'master-plan'].includes(k));
 
 const FOCUSES = [
   { id: 'overview', category: null, title: 'Overview',
@@ -216,6 +216,17 @@ const FOCUSES = [
   { id: 'polling-places', category: 'Elections', title: 'Polling places',
     question: 'How far do voters walk to their polling place, and which section areas do not match their place?',
     layers: ['polling-places'], areas: null, list: 'areas', drawer: 'folded', minZoom: 12 },
+  { id: 'master-plan', category: 'Planning', title: 'Master plan zones',
+    question: 'What does the 2009 master plan allow to be built here?',
+    layers: ['master-plan'], areas: null, list: 'areas', drawer: 'folded', minZoom: 13 },
+  { id: 'planned-housing', category: 'Planning', title: 'Land the plan gives to housing',
+    question: 'How much of each area does the master plan set aside for housing, including central and mixed zones?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'plan_residential_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'planned-production', category: 'Planning', title: 'Land the plan gives to production',
+    question: 'Where does the master plan keep land for industry and production?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'plan_production_share' },
+    list: 'areas', drawer: 'open' },
   { id: 'street-lights-led', category: 'Energy', title: 'LED street lights',
     question: 'Where had the street lights been changed to LED by 2017?',
     layers: [], areas: { kind: 'neighbourhood', metric: 'light_led_share' },

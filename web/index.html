@@ -156,6 +156,7 @@
   <label class="toggle"><input type="checkbox" data-key="census-tracts" data-layers="census-tracts-fill,census-tracts-line"> Census tracts</label>
   <label class="toggle"><input type="checkbox" data-key="population-grid" data-layers="population-grid-fill,population-grid-line"> Population grid 1 km (2011)</label>
   <label class="toggle"><input type="checkbox" data-key="polling-places" data-layers="polling-places"> Polling places</label>
+  <label class="toggle"><input type="checkbox" data-key="master-plan" data-layers="master-plan-fill,master-plan-line,master-plan-long-term"> Master plan zones (2009)</label>
   <label class="toggle"><input type="checkbox" data-key="rectifier-stations" data-layers="rectifier-stations"> Rectifier stations (trams, trolleybuses)</label>
   </details>
 
@@ -218,6 +219,11 @@
   <div data-legend="transit-routes" hidden>
   <h2>Public transport lines</h2>
   <div id="transit-route-legend" class="legend"></div>
+  </div>
+
+  <div data-legend="master-plan-fill" hidden>
+  <h2>Master plan 2009: zones</h2>
+  <div id="master-plan-legend" class="legend"></div>
   </div>
 
   <div data-legend="buildings-fill" hidden>
@@ -306,6 +312,11 @@ const PCT = [0.2, 0.4, 0.6, 0.8];
 const GREEN = ['#ffffcc', '#c2e699', '#78c679', '#31a354', '#006837'];
 const ORANGE = ['#feedde', '#fdbe85', '#fd8d3c', '#e6550d', '#a63603'];
 const PURPLE = ['#f2f0f7', '#cbc9e2', '#9e9ac8', '#756bb1', '#54278f'];
+// Master plan zones by group (masterplan.sql).
+const ZONE_COLORS = { residential: '#f4a742', central: '#b2182b', mixed: '#e7745b', 'public services': '#8073ac',
+                      production: '#8c6d5a', sport: '#e78ac3', green: '#66bd63', 'forest and nature': '#1b7837',
+                      agriculture: '#d9ef8b', transport: '#a0a0a0', water: '#6baed6', utilities: '#525252',
+                      'mining and landfills': '#8c510a', special: '#d0d0d0' };
 const METRICS = {
   share_500:          { label: 'Residents within 500 m of a station', breaks: PCT, colors: ACCESS, pct: true },
   share_1000:         { label: 'Residents within 1 km of a station', breaks: PCT, colors: ACCESS, pct: true },
@@ -395,6 +406,12 @@ const METRICS = {
   energy_heat_pumps_share_2050: { label: 'Heat from air heat pumps, 2050 (realistic scenario)',
                         indicator: 'energy_air_heat_pumps_mwh', breakdown: '2050', per: 'energy_heat_demand_mwh',
                         breaks: [0.05, 0.1, 0.15, 0.2], colors: GREEN, pct: true },
+  plan_residential_share: { label: 'Master plan: land for housing (residential, central and mixed zones)',
+                        breaks: PCT, colors: ORANGE, pct: true, byArea: true },
+  plan_green_share:   { label: 'Master plan: land for parks, green, forest and nature', breaks: PCT, colors: GREEN,
+                        pct: true, byArea: true },
+  plan_production_share: { label: 'Master plan: land for production', breaks: [0.05, 0.1, 0.2, 0.4], colors: PURPLE,
+                        pct: true, byArea: true },
   // The street lighting is not about residents: byArea colours every
   // area with a value.
   lights_per_km2:     { label: 'Street lights per km² (2017)', breaks: [100, 300, 600, 1000], colors: ORANGE, byArea: true },
@@ -458,6 +475,8 @@ map.on('load', async () => {
   map.addSource('transit-routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   for (const key of [...Object.keys(SMALL), 'polling-area'])
     map.addSource(key, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addSource('master-plan', { type: 'vector', minzoom: 12, maxzoom: 16,
+                                 tiles: [location.origin + '/api/master-plan/tiles/{z}/{x}/{y}.pbf'] });
   map.addSource('buildings', { type: 'vector', minzoom: 15, maxzoom: 16,
                                tiles: [location.origin + '/api/buildings/tiles/{z}/{x}/{y}.pbf'] });
 
@@ -475,6 +494,18 @@ map.on('load', async () => {
              'fill-opacity': 0.6 } });
   map.addLayer({ id: 'population-grid-line', type: 'line', source: 'population-grid', layout: { visibility: 'none' },
     paint: { 'line-color': '#8a6d55', 'line-width': 0.5 } });
+  // The long-term zones (for after the plan's horizon) lie over the
+  // 2009 ones: drawn as a dashed outline in their group's colour.
+  const zoneColor = ['match', ['get', 'zone_group'], ...Object.entries(ZONE_COLORS).flat(), '#d0d0d0'];
+  map.addLayer({ id: 'master-plan-fill', type: 'fill', source: 'master-plan', 'source-layer': 'zones',
+    minzoom: 12, filter: ['==', ['get', 'plan'], '2009'], layout: { visibility: 'none' },
+    paint: { 'fill-color': zoneColor, 'fill-opacity': 0.55 } });
+  map.addLayer({ id: 'master-plan-line', type: 'line', source: 'master-plan', 'source-layer': 'zones',
+    minzoom: 13, filter: ['==', ['get', 'plan'], '2009'], layout: { visibility: 'none' },
+    paint: { 'line-color': '#fff', 'line-width': 0.6 } });
+  map.addLayer({ id: 'master-plan-long-term', type: 'line', source: 'master-plan', 'source-layer': 'zones',
+    minzoom: 12, filter: ['==', ['get', 'plan'], 'long-term'], layout: { visibility: 'none' },
+    paint: { 'line-color': zoneColor, 'line-width': 2.5, 'line-dasharray': [2, 1] } });
   map.addLayer({ id: 'census-tracts-fill', type: 'fill', source: 'census-tracts', layout: { visibility: 'none' },
     paint: { 'fill-color': ['case', ['==', ['get', 'share_65_plus'], null], NO_DATA,
                             ['step', ['get', 'share_65_plus'], ...PURPLE.flatMap((c, i) => i ? [TRACT_BREAKS[i - 1], c] : [c])]],
@@ -597,6 +628,9 @@ map.on('load', async () => {
   renderEducationLegend();
   renderTransitLegend();
   renderBuildingLegend();
+  document.getElementById('master-plan-legend').innerHTML = Object.entries(ZONE_COLORS).map(([k, c]) =>
+    `<span><i class="swatch" style="background:${c}"></i>${k}</span>`).join('') +
+    `<span><i class="swatch" style="border:2px dashed #555"></i>long-term zone</span>`;
   renderSmallAreaLegends();
   const tag = (list, source) => list.map(i => ({ ...i, source }));
   renderIssues([...tag(issues, 'Metro'), ...tag(areaIssues, 'Areas'), ...tag(parkIssues, 'Parks'),
@@ -670,11 +704,17 @@ map.on('load', async () => {
     if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill'] }).length) return;
     selectCensusTract(e.features[0].properties.id);
   });
+  map.on('click', 'master-plan-fill', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill',
+                                                     'population-grid-fill'] }).length) return;
+    selectMasterPlanZone(e.features[0].id);
+  });
   map.on('click', 'population-grid-fill', e => {
     if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill'] }).length) return;
     selectGridCell(e.features[0].properties.id);
   });
-  for (const id of ['polling-places', 'rectifier-stations', 'census-tracts-fill', 'population-grid-fill']) {
+  for (const id of ['polling-places', 'rectifier-stations', 'census-tracts-fill', 'population-grid-fill',
+                    'master-plan-fill']) {
     map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   }
@@ -685,15 +725,16 @@ map.on('load', async () => {
   map.on('mouseenter', 'buildings-fill', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'buildings-fill', () => map.getCanvas().style.cursor = '');
   map.on('click', 'areas-fill', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill', 'population-grid-fill'] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...POINTS, 'parks-fill', 'buildings-fill', 'census-tracts-fill',
+                                                     'population-grid-fill', 'master-plan-fill'] }).length) return;
     selectArea(areaKind, e.features[0].properties.id);
   });
 
   // ?station=<id>, ?entrance=<id>, ?park=<id>, ?park_entrance=<id>,
   // ?kindergarten=<id>, ?school=<id>, ?transit_stop=<id>,
   // ?transit_route=<id>, ?building=<id>, ?polling_section=<id>,
-  // ?census_tract=<id>, ?grid_cell=<id>, ?rectifier_station=<id> or
-  // ?area=<kind>:<id> opens the page
+  // ?census_tract=<id>, ?grid_cell=<id>, ?rectifier_station=<id>,
+  // ?master_plan_zone=<id> or ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   applyFocus(q.get('focus') || 'overview');
@@ -710,6 +751,7 @@ map.on('load', async () => {
   else if (q.has('census_tract')) selectCensusTract(q.get('census_tract'), false);
   else if (q.has('grid_cell')) selectGridCell(q.get('grid_cell'), false);
   else if (q.has('rectifier_station')) selectRectifierStation(+q.get('rectifier_station'), false);
+  else if (q.has('master_plan_zone')) selectMasterPlanZone(+q.get('master_plan_zone'), false);
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
@@ -887,6 +929,28 @@ async function selectPollingSection(id, animate) {
         : `${num(p.mean_distance_m)} m on average, ${num(p.max_distance_m)} m at most <span class="sub">(straight line)</span>`}</dd>
       <dt>Data as of</dt><dd>election ${esc(p.data_as_of)}; areas ${esc(p.area_as_of ?? '—')}</dd>
       <dt>Source</dt><dd>${esc(p.source)}, electoral_division-zip</dd>
+    </dl>`;
+}
+
+async function selectMasterPlanZone(id, animate) {
+  const cb = document.querySelector('input[data-key="master-plan"]');
+  if (!cb.checked) cb.click();
+  const f = await getJSON('/api/master-plan/zones/' + id);
+  const p = f.properties;
+  select('master_plan_zone', id);
+  map.getSource('polling-area').setData(f);
+  map.fitBounds(bboxOf(f.geometry), { padding: 60, maxZoom: 16, animate: animate !== false });
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(p.code)} · ${esc(p.name)}</h3>
+    <div>${p.plan === 'long-term' ? 'Long-term zone: for development after the horizon of the 2009 master plan.'
+      : 'Zone of the 2009 master plan (ОУП).'}</div>
+    <dl>
+      <dt>Group</dt><dd><i class="swatch" style="background:${ZONE_COLORS[p.zone_group]}"></i> ${esc(p.zone_group)}</dd>
+      ${p.special_rules ? '<dt>Rules</dt><dd>specific rules and norms apply (* in the code)</dd>' : ''}
+      <dt>Area</dt><dd>${num(p.area_ha)} ha</dd>
+      <dt>District</dt><dd>${esc(p.district || '—')}</dd>
+      <dt>Data as of</dt><dd>${esc(p.data_as_of)}</dd>
+      <dt>Source</dt><dd>${esc(p.source)}</dd>
     </dl>`;
 }
 
@@ -1261,6 +1325,13 @@ async function selectArea(kind, id, animate) {
     ${t.sofiaplan_transit_share_400 != null ? `<div class="sub" style="margin-top:6px">Sofiaplan (2021, 400 m on foot):
       ${pct(t.sofiaplan_transit_share_400)} of residents near a stop; we find ${pct(t.transit_share_400)}.</div>` : ''}`)(a.transit_access)
       : '<div class="empty">No residents in the 2019 building data.</div>'}
+    <h4>Master plan 2009</h4>
+    ${a.master_plan ? (m => { const total = m.reduce((t, g) => t + +g.area_ha, 0); return `<table class="access">
+      ${m.filter(g => g.area_ha / total >= 0.01).map(g => `<tr><td><i class="swatch" style="background:${ZONE_COLORS[g.group]}"></i>
+        ${esc(g.group)}</td><td>${pct(g.area_ha / total)} <span class="sub">${num(Math.round(g.area_ha))} ha</span></td></tr>`).join('')}
+    </table>
+    <div class="sub">Share of the zoned land; the streets are not zoned.</div>`; })(a.master_plan)
+      : '<div class="empty">No master plan zones here.</div>'}
     <h4>Street lighting (2017)</h4>
     ${a.lighting ? (l => `<table class="access">
       <tr><td>street lights</td><td>${num(l.street_lights)} <span class="sub">${num(Math.round(l.street_lights / a.area_km2))} per km²</span></td></tr>
