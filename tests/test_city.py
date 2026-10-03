@@ -820,3 +820,52 @@ class IndicatorsTest(unittest.TestCase):
                        sum(value) FILTER (WHERE indicator = 'population_forecast_high') hi
                   FROM city.planning_unit_indicators GROUP BY breakdown) t
              WHERE NOT (lo <= mid AND mid <= hi)"""), 0)
+
+
+class SmallAreasTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.polling_sections").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.polling_sections is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_all_tracts_and_sections_loaded(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.census_tracts"), 6103)
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.polling_sections"), 1598)
+
+    def test_tracts_hold_nearly_all_census_people(self):
+        # Points just outside every tract go to the nearest within 50 m.
+        self.assertGreater(self.scalar("""
+            SELECT sum(t.census_people)::float / (SELECT sum(people) FROM city.census_addresses)
+              FROM city.census_tracts t"""), 0.97)
+
+    def test_grid_in_sofia_matches_the_census_total(self):
+        # NSI's 2011 count for Sofia (capital) municipality: 1,291,591.
+        self.assertAlmostEqual(self.scalar("""
+            SELECT sum(people) FROM city.population_grid WHERE in_sofia"""), 1291591, delta=15000)
+
+    def test_polling_places_are_in_sofia(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.polling_sections WHERE place_district_code IS NULL"""), 0)
+
+    def test_section_number_district_is_a_district(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.polling_sections s
+             WHERE NOT EXISTS (SELECT 1 FROM city.districts d WHERE d.code = s.district_code)"""), 0)
+
+    def test_most_sections_have_an_area(self):
+        self.assertLess(self.scalar("SELECT count(*) FROM city.polling_sections WHERE area IS NULL"), 20)
+
+    def test_place_split_from_address(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.polling_sections
+             WHERE place = '' OR place ~ '^(гр|с)\\.' OR address LIKE '%' || chr(13) || '%'"""), 0)

@@ -1365,3 +1365,112 @@ SELECT 'percentage outside 0-100', v.indicator,
   JOIN indicators i ON i.id = v.indicator AND i.unit = '%'
   LEFT JOIN planning_units u ON u.id = v.planning_unit_id
  WHERE v.value < 0 OR v.value > 100;
+
+-- ------------------------------------------- small statistical areas
+
+-- NSI census tracts (преброителни участъци, 2017), with what the 2011
+-- census addresses and the 2019 buildings put inside them. Both are
+-- placed by their building outline where they have one: address points
+-- lie on the street, which is often the tract boundary.
+CREATE TABLE IF NOT EXISTS census_tracts (
+    id               text PRIMARY KEY,          -- district-control area-tract, e.g. 20-042-1
+    district_code    text NOT NULL,             -- ecode_rayon as given
+    ekatte           text NOT NULL,             -- settlement
+    control_area     text NOT NULL,             -- kontr_r
+    tract            text NOT NULL,             -- pr_u
+    geom             geometry(MultiPolygon, 4326) NOT NULL,
+    area_km2         numeric NOT NULL,
+    census_addresses integer NOT NULL,
+    census_people    integer,
+    dwellings        integer,
+    age_0_14         integer,
+    age_65_plus      integer,
+    residents_2019   integer,
+    data_as_of       date,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS census_tracts_geom_idx ON census_tracts USING gist (geom);
+
+-- NSI's 2011 census on the European 1 km grid, for the Sofia
+-- agglomeration; in_sofia marks the cells whose centre is in a district.
+CREATE TABLE IF NOT EXISTS population_grid (
+    id               text PRIMARY KEY,          -- grd_id, e.g. 1kmN2269E5360
+    people           integer NOT NULL,
+    male             integer,
+    female           integer,
+    age_0_14         integer,
+    age_15_64        integer,
+    age_65_plus      integer,
+    method           text,                      -- methd_cl, not documented
+    in_sofia         boolean NOT NULL,
+    census_address_people integer,              -- the same census by address
+    residents_2019   integer,                   -- the 2019 buildings
+    geom             geometry(MultiPolygon, 4326) NOT NULL,
+    data_as_of       date,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS population_grid_geom_idx ON population_grid USING gist (geom);
+
+-- Polling sections of the April 2026 election: the polling place, and
+-- the section's area from the August 2026 electoral division.
+CREATE TABLE IF NOT EXISTS polling_sections (
+    id               text PRIMARY KEY,          -- section number, e.g. 234602001
+    district_code    text NOT NULL,             -- digits 5-6 of the number
+    number           integer NOT NULL,          -- within the district
+    place            text,                      -- building, from the address
+    address          text,
+    geom             geometry(Point, 4326) NOT NULL,  -- the polling place
+    place_district_code text,                   -- district the place lies in
+    area             geometry(MultiPolygon, 4326),    -- NULL: not in the division
+    residents_2019   integer,                   -- buildings inside the area
+    mean_distance_m  integer,                   -- resident-weighted, straight line
+    max_distance_m   integer,                   -- to the farthest inhabited building
+    data_as_of       date,
+    area_as_of       date,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS polling_sections_geom_idx ON polling_sections USING gist (geom);
+CREATE INDEX IF NOT EXISTS polling_sections_area_idx ON polling_sections USING gist (area);
+
+-- Electoral division areas with no polling place in April 2026.
+CREATE TABLE IF NOT EXISTS polling_areas_unplaced (
+    district_code    text NOT NULL,
+    number           integer NOT NULL,
+    place            text,
+    geom             geometry(MultiPolygon, 4326) NOT NULL,
+    PRIMARY KEY (district_code, number)
+);
+
+CREATE OR REPLACE VIEW small_area_issues AS
+SELECT 'census tract coded for another district' AS issue, 'census_tract' AS kind, t.id,
+       format('code %s, lies in %s', t.district_code, d.name) AS detail, ST_PointOnSurface(t.geom) AS geom
+  FROM census_tracts t JOIN districts d ON ST_Contains(d.geom, ST_PointOnSurface(t.geom))
+ WHERE d.code <> t.district_code
+UNION ALL
+SELECT 'grid cell: census by address far from the grid', 'grid', g.id,
+       format('grid %s people, addresses %s', g.people, coalesce(g.census_address_people, 0)),
+       ST_Centroid(g.geom)
+  FROM population_grid g
+ WHERE g.in_sofia AND greatest(g.people, coalesce(g.census_address_people, 0)) >= 200
+   AND abs(g.people - coalesce(g.census_address_people, 0)) > 0.5 * greatest(g.people, coalesce(g.census_address_people, 0))
+UNION ALL
+SELECT 'polling place in another district than its section', 'polling_section', s.id,
+       format('%s, lies in district %s', coalesce(s.place, s.address), s.place_district_code), s.geom
+  FROM polling_sections s WHERE s.place_district_code IS DISTINCT FROM s.district_code
+UNION ALL
+SELECT 'polling section without an area in the division', 'polling_section', s.id,
+       concat_ws(', ', s.place, s.address), s.geom
+  FROM polling_sections s WHERE s.area IS NULL
+UNION ALL
+SELECT 'polling place far from its section', 'polling_section', s.id,
+       format('%s: %s m from the section area', coalesce(s.place, s.address),
+              round(ST_Distance(s.geom::geography, s.area::geography))), s.geom
+  FROM polling_sections s
+ WHERE s.area IS NOT NULL AND NOT ST_DWithin(s.geom::geography, s.area::geography, 1000)
+UNION ALL
+SELECT 'section area without a polling place', 'polling_area', u.district_code || '-' || u.number,
+       format('section %s in district %s (%s)', u.number, u.district_code, u.place), ST_PointOnSurface(u.geom)
+  FROM polling_areas_unplaced u;
