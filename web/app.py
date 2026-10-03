@@ -711,8 +711,9 @@ def indicators():
 
 
 # One indicator's values as {planning unit id: value}, for colouring the
-# map. per: divide by another indicator of the same unit (no breakdown),
-# e.g. the forecast for 2030 per resident of 2017.
+# map. per: divide by another indicator of the same unit, of the same
+# breakdown or of none: the forecast for 2030 per resident of 2017, the
+# heat from district heating in 2050 per the heat demand of 2050.
 @app.get("/api/indicators/{indicator}")
 def indicator_values(indicator: str = PathParam(pattern=r"^[a-z0-9_]+$"),
                      breakdown: str = "",
@@ -725,7 +726,7 @@ def indicator_values(indicator: str = PathParam(pattern=r"^[a-z0-9_]+$"),
           FROM planning_unit_indicators v
           LEFT JOIN planning_unit_indicators d
                  ON d.planning_unit_id = v.planning_unit_id AND d.indicator = %(per)s
-                AND d.breakdown = ''
+                AND d.breakdown IN ('', v.breakdown)
          WHERE v.indicator = %(id)s AND v.breakdown = %(breakdown)s AND v.value IS NOT NULL
            AND (%(per)s = '' OR d.value > 0)
     """, {"id": indicator, "breakdown": breakdown, "per": per})

@@ -4,7 +4,7 @@
 // metrics we actually have before they are shown.
 
 const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Health', 'Population', 'Elections',
-                          'Buildings', 'Housing', 'Planning', 'Environment', 'Technical'];
+                          'Buildings', 'Housing', 'Planning', 'Energy', 'Environment', 'Technical'];
 
 // Keys of the layer toggles in the sidebar (data-key).
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
@@ -181,6 +181,26 @@ const FOCUSES = [
   { id: 'sewer', category: 'Technical', title: 'Sewer network',
     question: 'How much of each planning unit is served by the sewer network?',
     layers: [], areas: { kind: 'planning_unit', metric: 'sewer_connected_pct' },
+    list: 'areas', drawer: 'open' },
+  { id: 'coal-heating', category: 'Energy', title: 'Heating with coal',
+    question: 'What share of the heat for homes came from coal in 2017, in Sofiaplan\'s energy model?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'energy_coal_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'district-heating', category: 'Energy', title: 'District heating',
+    question: 'Where does the heat come from the district heating network, and where not?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'energy_district_heating_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'electric-heating', category: 'Energy', title: 'Electric heating',
+    question: 'Where do homes heat with electricity, which strains the grid in winter?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'energy_electric_heating_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'district-heating-2050', category: 'Energy', title: 'District heating in 2050',
+    question: 'How much heat will district heating supply in 2050, in Sofiaplan\'s realistic scenario?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'energy_district_heating_share_2050' },
+    list: 'areas', drawer: 'open' },
+  { id: 'heat-pumps-2050', category: 'Energy', title: 'Heat pumps in 2050',
+    question: 'Where will air heat pumps supply the heat in 2050, in the realistic scenario?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'energy_heat_pumps_share_2050' },
     list: 'areas', drawer: 'open' },
   { id: 'dkc-access', category: 'Health', title: 'Polyclinics on foot',
     question: 'What share of residents has no district polyclinic (DKC) within walking distance?',

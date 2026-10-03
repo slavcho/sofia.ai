@@ -382,6 +382,18 @@ const METRICS = {
                         breaks: [25, 50, 75, 95], colors: ACCESS },
   healthcare_facilities: { label: 'Healthcare facilities', indicator: 'healthcare_facilities',
                         breaks: [1, 3, 10, 30], colors: ACCESS },
+  energy_coal_share:  { label: 'Heat from coal (2017)', indicator: 'energy_coal_mwh',
+                        breakdown: '2017', per: 'energy_heat_demand_mwh', breaks: [0.02, 0.05, 0.1, 0.25], colors: ORANGE, pct: true },
+  energy_district_heating_share: { label: 'Heat from district heating (2017)', indicator: 'energy_district_heating_mwh',
+                        breakdown: '2017', per: 'energy_heat_demand_mwh', breaks: PCT, colors: ACCESS, pct: true },
+  energy_electric_heating_share: { label: 'Heat from electric heating (2017)', indicator: 'energy_electric_heating_mwh',
+                        breakdown: '2017', per: 'energy_heat_demand_mwh', breaks: PCT, colors: PURPLE, pct: true },
+  energy_district_heating_share_2050: { label: 'Heat from district heating, 2050 (realistic scenario)',
+                        indicator: 'energy_district_heating_mwh', breakdown: '2050', per: 'energy_heat_demand_mwh',
+                        breaks: PCT, colors: ACCESS, pct: true },
+  energy_heat_pumps_share_2050: { label: 'Heat from air heat pumps, 2050 (realistic scenario)',
+                        indicator: 'energy_air_heat_pumps_mwh', breakdown: '2050', per: 'energy_heat_demand_mwh',
+                        breaks: [0.05, 0.1, 0.15, 0.2], colors: GREEN, pct: true },
   dkc_unserved_pct:   { label: 'Residents with no polyclinic (DKC) on foot, % (Sofiaplan)', indicator: 'dkc_unserved_pct',
                         breaks: [1, 10, 30, 60], colors: ORANGE },
 };
@@ -1250,12 +1262,15 @@ function indicatorTable(rows) {
     : r.unit === '%' ? num(Math.round(r.value * 10) / 10) + '%'
     : r.unit === 'share' ? pct(r.value)
     : r.unit === 'm²' ? num(Math.round(r.value)) + ' m²'
+    : r.unit === 'MWh' ? num(Math.round(r.value)) + ' MWh'
     : num(Math.round(r.value * 100) / 100) + (r.unit === 'per m²' ? ' per m²' : '');
   const by = {};
   rows.forEach(r => (by[r.id] ||= []).push(r));
   return '<table class="access">' + Object.values(by).map(rs => {
-    const r0 = rs[0], years = rs.every(r => /^\d{4}$/.test(r.breakdown));
-    const shown = years && rs.length > 4 ? rs.slice(-1) : rs;
+    // A series by year shows its first and last year; the other
+    // scenarios of the energy files stay out, the realistic one is shown.
+    const r0 = rs[0], byYear = rs.filter(r => /^\d{4}$/.test(r.breakdown));
+    const shown = byYear.length > 2 ? [byYear[0], byYear.at(-1)] : byYear.length ? byYear : rs;
     const value = shown.length === 1 && !shown[0].breakdown ? fmt(shown[0])
       : shown.map(r => `${fmt(r)} <span class="sub">${esc(r.breakdown)}</span>`).join('<br>');
     return `<tr><td>${esc(r0.label)}${r0.data_as_of ? ` <span class="sub">${esc(r0.data_as_of.slice(0, 4))}</span>` : ''}</td>
