@@ -1376,7 +1376,18 @@ SELECT 'heat demand is not heating plus hot water', t.indicator,
   JOIN planning_unit_indicators w ON w.planning_unit_id = t.planning_unit_id AND w.breakdown = t.breakdown
    AND w.indicator = 'energy_hot_water_mwh'
   LEFT JOIN planning_units u ON u.id = t.planning_unit_id
- WHERE t.indicator = 'energy_heat_demand_mwh' AND abs(t.value - h.value - w.value) > 1;
+ WHERE t.indicator = 'energy_heat_demand_mwh' AND abs(t.value - h.value - w.value) > 1
+UNION ALL
+-- District heating is one of the sources of the heat demand, yet in some
+-- units it supplies more, up to eleven times: probably the district heat
+-- includes non-residential buildings while the demand is residential.
+SELECT 'district heating supplies more than the heat demand', d.indicator,
+       format('%s, %s: %s MWh district heating, %s MWh demand', u.name, d.breakdown, round(d.value), round(t.value))
+  FROM planning_unit_indicators d
+  JOIN planning_unit_indicators t ON t.planning_unit_id = d.planning_unit_id AND t.breakdown = d.breakdown
+   AND t.indicator = 'energy_heat_demand_mwh'
+  LEFT JOIN planning_units u ON u.id = d.planning_unit_id
+ WHERE d.indicator = 'energy_district_heating_mwh' AND d.value > t.value * 1.01;
 
 -- ------------------------------------------- small statistical areas
 

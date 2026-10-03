@@ -1094,3 +1094,17 @@ interpreted by `db/city/transit.sql`.
 - **Handling:** the values are kept as given.
   **Check:** `indicator_issues` ('heat demand is not heating plus
   hot water').
+
+### 85. District heating supplies more than the heat demand
+
+- **Status:** flagged.
+- **What:** district heating (`stec`) is one of the sources of the
+  heat demand, yet it is above the demand in 38 units in 2017, 29 in
+  2030, 20 in 2040 and 12 in 2050, up to 11 times; 4 units have
+  district heating and no demand at all. Probably the district heat
+  includes offices, schools and other non-residential buildings,
+  while the demand is that of the homes.
+- **Handling:** the values are kept as given, so the district heating
+  share on the map can be above 100 %.
+  **Check:** `indicator_issues` ('district heating supplies more than
+  the heat demand').

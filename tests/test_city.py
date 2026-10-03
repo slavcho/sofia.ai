@@ -839,6 +839,20 @@ class IndicatorsTest(unittest.TestCase):
              WHERE t.indicator = 'energy_heat_demand_mwh'
                AND abs(t.value - h.value - w.value) > 1"""), n)
 
+    def test_energy_district_heating_above_demand_is_reported(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.indicator_issues
+             WHERE issue = 'district heating supplies more than the heat demand'"""),
+            self.scalar("""
+            SELECT count(*) FROM city.planning_unit_indicators d
+              JOIN city.planning_unit_indicators t
+                ON t.planning_unit_id = d.planning_unit_id AND t.breakdown = d.breakdown
+               AND t.indicator = 'energy_heat_demand_mwh'
+             WHERE d.indicator = 'energy_district_heating_mwh' AND d.value > t.value * 1.01"""))
+        self.assertGreater(self.scalar("""
+            SELECT count(*) FROM city.indicator_issues
+             WHERE issue = 'district heating supplies more than the heat demand'"""), 0)
+
     def test_energy_scenarios_by_decade(self):
         # 2017, the realistic scenario by decade under the bare year, and
         # the optimistic and pessimistic ones for the fields that have them.
