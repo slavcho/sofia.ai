@@ -5,7 +5,8 @@ per kind of problem. Single rows that show the problem are listed by the
 issue views in the database (`city.metro_issues`, `city.area_issues`,
 `city.park_issues`, `city.education_issues`, `city.catchment_issues`,
 `city.transit_issues`, `city.building_issues`, `city.census_issues`,
-`city.building_extra_issues`, `city.indicator_issues`); this
+`city.building_extra_issues`, `city.indicator_issues`,
+`city.small_area_issues`); this
 file records what we know about each kind: where it comes from, what it
 affects, and what we did about it.
 
@@ -97,6 +98,13 @@ When you add an entry, give it the next number and keep the fields.
 | 72 | Forecast scenario codes are not documented | indicators | worked around |
 | 73 | Sewer connection above 100 % | indicators | flagged |
 | 74 | Indicator files left out | indicators | open |
+| 75 | DKC access is on an older division of 297 units | indicators | flagged |
+| 76 | Census tracts are drawn tighter than the buildings | small areas | worked around |
+| 77 | 191 census tracts are coded for another district | small areas | flagged |
+| 78 | The grid and the address census disagree at the edges | small areas | flagged |
+| 79 | Polling places come as UTM coordinates with loose addresses | elections | worked around |
+| 80 | Polling places and section areas are of different dates | elections | flagged |
+| 81 | Some polling places lie far from their section | elections | flagged |
 
 ## Metro
 
@@ -968,3 +976,81 @@ interpreted by `db/city/transit.sql`.
   - Kopralev's forecast on the older division (the adjusted one is
     loaded).
 - **Handling:** none; ask Sofiaplan for the field descriptions.
+
+### 75. DKC access is on an older division of 297 units
+
+- **Status:** flagged.
+- **What:** Sofiaplan's walking access to the DKC polyclinics (early
+  2021) has 297 unnamed units; 245 match a current planning unit by
+  shape (90 % overlap), 52 match none.
+- **Handling:** the 52 are left out of `dkc_unserved_pct`.
+  **Check:** `indicator_issues`.
+
+## Small areas
+
+### 76. Census tracts are drawn tighter than the buildings
+
+- **Status:** worked around.
+- **What:** the NSI census tracts (2017) leave gaps along the streets
+  and are drawn inside the cadastral outlines: a point on the surface
+  of an inhabited building falls outside every tract for 5,360
+  buildings (231,040 residents of 2019), 4,728 of them within 25 m.
+- **Handling:** `small_areas.sql` puts such a home in the nearest tract
+  within 50 m; the tracts then hold 98.5 % of the census addresses'
+  people and 98.6 % of the 2019 residents.
+
+### 77. 191 census tracts are coded for another district
+
+- **Status:** flagged.
+- **What:** `ecode_rayon` names a district other than the one the tract
+  lies in for 191 of 6,103 tracts. As with the census addresses (#62)
+  most are along district borders.
+- **Check:** `small_area_issues` ('census tract coded for another
+  district').
+
+### 78. The grid and the address census disagree at the edges
+
+- **Status:** flagged.
+- **What:** NSI's 1 km grid holds 1,292,702 people in the cells whose
+  centre is in Sofia, the official 2011 count; the census addresses
+  hold 1,177,165 (#60). In 24 cells with 200 people or more the two
+  differ by more than half, mostly villages and edges of the city
+  that the address file lacks. `methd_cl` (A or empty) is not
+  explained.
+- **Check:** `small_area_issues` ('grid cell: census by address far
+  from the grid').
+
+## Elections
+
+### 79. Polling places come as UTM coordinates with loose addresses
+
+- **Status:** worked around.
+- **What:** `izbori_april_2026` is a spreadsheet with x and y in UTM
+  zone 35N (EPSG:32635), which is not stated; the date is an Excel day
+  number. "Адрес" is usually "<building>, гр.София, <street>", but some
+  start with the settlement and have no building, and some contain
+  line breaks.
+- **Handling:** the zone was confirmed by every place falling in
+  Sofia, in the district of its section number but two (#81). Place
+  and address are split at the first comma unless the text starts
+  with "гр." or "с.".
+
+### 80. Polling places and section areas are of different dates
+
+- **Status:** flagged.
+- **What:** the places are of the 19 April 2026 election, the section
+  areas of the August 2026 division. 9 sections have no area (mostly
+  hospitals and other special sections) and 2 areas have no place.
+  The areas are joined to the places by district name and the number
+  within the district (digits 5-6 and 7-9 of the section number).
+- **Check:** `small_area_issues`.
+
+### 81. Some polling places lie far from their section
+
+- **Status:** flagged.
+- **What:** 14 polling places are more than 1 km from their section's
+  area, and 2 sections of Студентски vote in Оборище. Some may be
+  real (a school serving several sections), some a mismatch of dates
+  (#80).
+- **Check:** `small_area_issues` ('polling place far from its
+  section', 'polling place in another district than its section').
