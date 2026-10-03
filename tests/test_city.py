@@ -796,10 +796,12 @@ class IndicatorsTest(unittest.TestCase):
              WHERE v.value < 0 OR v.value > 1"""), 0)
 
     def test_current_division_matches_every_unit(self):
-        # Only the 2019 files, on the older division, may lose units.
+        # Only the files on an older division may lose units: the 2019
+        # functions file and the DKC access (297 units).
         self.assertEqual(self.scalar("""
             SELECT count(*) FROM city.indicators
-             WHERE unmatched > 0 AND data_as_of > '2019-12-31'"""), 0)
+             WHERE unmatched > 0
+               AND id NOT IN ('function_kinds', 'poi_density', 'dkc_unserved_pct')"""), 0)
 
     def test_totals_as_in_the_source(self):
         self.assertEqual(self.scalar("""

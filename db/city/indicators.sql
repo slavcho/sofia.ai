@@ -24,7 +24,6 @@
 --   demographic-projection-by-kopralev-for-urban-planning-units
 --       the same forecast on the older division; the adjusted one is used.
 --   energy-development-scenarios-by-urban-planning-units  (energy.sql)
---   population-access-to-diagnostic-and-consultation-centers-...  (services)
 
 \set ON_ERROR_STOP on
 SET search_path = city, urban, public;
@@ -68,6 +67,9 @@ INSERT INTO defs VALUES
   ('social_services', 'Social services', 'count', 'Services',
    'social-services-concentration-urban-planning-units', 'broi_soc_uslugi', '', NULL,
    'Number of social services in the unit.'),
+  ('dkc_unserved_pct', 'Residents without walking access to a DKC', '%', 'Services',
+   'population-access-to-diagnostic-and-consultation-centers-by-urban-planning-units', 'percent_unserv', '', '2021-01-01',
+   'Share of residents (GRAO, early 2021) with no diagnostic and consultation centre (поликлиника) within walking distance; an older division of 297 units, matched by shape only.'),
   ('school_unserved_pct', 'Residents without walking access to a school', '%', 'Services',
    'pedestrian-access-to-schools-and-municipal-kindergartens-share-of-unserved-population', 'uch_perc', '', NULL,
    'Share of residents with no school within walking distance (Sofiaplan); only the 228 units with residents.'),
