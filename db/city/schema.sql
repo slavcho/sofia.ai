@@ -998,3 +998,115 @@ SELECT area_kind, area_id,
   FROM levels
  WHERE area_id IS NOT NULL
  GROUP BY area_kind, area_id;
+
+-- ------------------------------------------------------------- buildings
+--
+-- Every building outline of the archived cadastral plan (GIS Sofia,
+-- published 2026-09-08). "Archived": the plan as it stood before the
+-- cadastral map came into force, so buildings put up since then are
+-- missing; the publisher does not say when that was. Filled by
+-- buildings.sql.
+CREATE TABLE IF NOT EXISTS buildings (
+    id               integer PRIMARY KEY,     -- rn in the source
+    function         text,                    -- as in the source, e.g. Сгради многожилищни
+    category         text,                    -- our grouping of function, see buildings.sql
+    ownership        text,                    -- as in the source; NULL where it is "---"
+    municipal        boolean NOT NULL,        -- outline of a municipal building (obst_sobstv_sgradi)
+    municipal_part   text,                    -- e.g. "ид. част", when only part of it is
+    floors_text      text,                    -- as in the source: "4", "-1", "2/3", "1 1/2"
+    floors           integer,                 -- floors_text when a whole number; negative: underground only
+    footprint_m2     numeric NOT NULL,
+    region_label     text,                    -- district name in the source
+    -- From Sofiaplan's buildings (2019) whose centroid lies in this outline
+    -- (or within 10 m of it); NULL when there is none.
+    buildings_2019   integer NOT NULL DEFAULT 0,
+    people_2019      integer,
+    households_2019  integer,
+    apartments_2019  integer,
+    built_year_2019  integer,                 -- the earliest, if several
+    floors_2019      integer,                 -- the highest, if several
+    geom             geometry(Polygon, 4326) NOT NULL,
+    district_code    text REFERENCES districts(code),
+    neighbourhood_id integer REFERENCES neighbourhoods(id),
+    planning_unit_id integer REFERENCES planning_units(id),
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS buildings_geom_idx ON buildings USING gist (geom);
+CREATE INDEX IF NOT EXISTS buildings_district_idx ON buildings (district_code);
+CREATE INDEX IF NOT EXISTS buildings_neighbourhood_idx ON buildings (neighbourhood_id);
+CREATE INDEX IF NOT EXISTS buildings_planning_unit_idx ON buildings (planning_unit_id);
+
+-- All of Sofiaplan's 2019 building centroids, inhabited or not, and the
+-- cadastre outline each falls in. id is the same as building_residents.id
+-- for the inhabited ones. match: 'inside' the outline, 'nearest' outline
+-- within 10 m (the two drawings are offset by a few metres in places),
+-- or 'none'.
+CREATE TABLE IF NOT EXISTS buildings_2019 (
+    id             integer PRIMARY KEY,       -- id in the source
+    building_id    integer REFERENCES buildings(id) ON DELETE SET NULL,
+    match          text NOT NULL CHECK (match IN ('inside', 'nearest', 'none')),
+    distance_m     numeric,                   -- to the outline, for 'nearest' and 'none'
+    cadastre_ref   text,                      -- id_kk, e.g. 68134.707.14.1
+    people         integer NOT NULL,
+    households     integer,
+    apartments     integer,
+    floors         integer,
+    built_year     integer,
+    footprint_m2   numeric,
+    geom           geometry(Point, 4326) NOT NULL,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS buildings_2019_geom_idx ON buildings_2019 USING gist (geom);
+CREATE INDEX IF NOT EXISTS buildings_2019_building_idx ON buildings_2019 (building_id);
+
+CREATE OR REPLACE VIEW building_issues AS
+SELECT 'inhabited building of 2019 missing from the cadastral plan' AS issue,
+       b.id::text AS building_id, NULL::integer AS cadastre_id,
+       format('%s people, nearest outline %s m away', b.people, round(b.distance_m)) AS detail,
+       b.geom
+  FROM buildings_2019 b WHERE b.match = 'none' AND b.people > 0
+UNION ALL
+SELECT 'building without a function', NULL, c.id,
+       format('%s, %s m²', coalesce(c.ownership, 'ownership unknown'), round(c.footprint_m2)),
+       ST_PointOnSurface(c.geom)
+  FROM buildings c WHERE c.function IS NULL
+UNION ALL
+SELECT 'floor count is not a number', NULL, c.id,
+       format('"%s" (%s)', c.floors_text, c.function),
+       ST_PointOnSurface(c.geom)
+  FROM buildings c WHERE c.floors IS NULL AND c.floors_text IS NOT NULL
+UNION ALL
+SELECT 'district label disagrees with its location', NULL, c.id,
+       format('labelled "%s", lies in %s', c.region_label, coalesce(d.name, 'no district')),
+       ST_PointOnSurface(c.geom)
+  FROM buildings c LEFT JOIN districts d ON d.code = c.district_code
+ WHERE lower(c.region_label) IS DISTINCT FROM lower(d.name)
+UNION ALL
+SELECT 'outline smaller than 1 m²', NULL, c.id,
+       format('%s m², %s', round(c.footprint_m2, 2), c.function),
+       ST_PointOnSurface(c.geom)
+  FROM buildings c WHERE c.footprint_m2 < 1;
+
+-- Building stock by area, from the cadastral plan.
+CREATE OR REPLACE VIEW area_buildings AS
+WITH levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, b.* FROM buildings b
+    UNION ALL SELECT 'district', b.district_code, b.* FROM buildings b
+    UNION ALL SELECT 'neighbourhood', b.neighbourhood_id::text, b.* FROM buildings b
+    UNION ALL SELECT 'planning_unit', b.planning_unit_id::text, b.* FROM buildings b
+)
+SELECT area_kind, area_id,
+       count(*) AS buildings,
+       count(*) FILTER (WHERE category = 'residential') AS residential_buildings,
+       round(sum(footprint_m2)) AS footprint_m2,
+       -- footprint times floors: a rough gross floor area, above ground only
+       round(sum(footprint_m2 * floors) FILTER (WHERE floors > 0)) AS floor_area_m2,
+       round(avg(floors) FILTER (WHERE floors > 0 AND category = 'residential'), 1) AS residential_mean_floors,
+       count(*) FILTER (WHERE municipal) AS municipal_buildings
+  FROM levels
+ WHERE area_id IS NOT NULL
+ GROUP BY area_kind, area_id;

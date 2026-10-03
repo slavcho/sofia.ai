@@ -554,3 +554,86 @@ class TransitAccessTest(unittest.TestCase):
               FROM city.area_transit_access WHERE area_kind = 'city'""").fetchone()
         self.assertGreater(row[0], row[1])
         self.assertLess(row[2], 0.01)
+
+
+class BuildingsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.buildings").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.buildings is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_every_2019_building_is_kept(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.buildings_2019"),
+                         self.scalar("""
+            SELECT count(*) FROM urban.features f
+              JOIN urban.layers l ON l.id = f.layer_id
+              JOIN urban.resources r ON r.id = l.resource_id
+              JOIN urban.datasets d ON d.id = r.dataset_id
+             WHERE d.name = 'building-centroids-resident-count-800-m'"""))
+
+    def test_inhabited_2019_buildings_are_the_residents(self):
+        # Same ids and people as building_residents, so the access tables
+        # (keyed on it) can be joined to the outlines.
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_residents r
+              FULL JOIN (SELECT * FROM city.buildings_2019 WHERE people > 0) b ON b.id = r.id
+             WHERE r.id IS NULL OR b.id IS NULL OR r.people <> b.people"""), 0)
+
+    def test_match_agrees_with_the_link(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.buildings_2019
+             WHERE (match = 'none') <> (building_id IS NULL)
+                OR (match = 'nearest' AND NOT distance_m <= 10)
+                OR (match = 'none' AND NOT distance_m >= 10)  -- rounded to 0.1 m"""), 0)
+
+    def test_inside_match_really_is_inside(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.buildings_2019 b
+              JOIN city.buildings c ON c.id = b.building_id
+             WHERE b.match = 'inside' AND NOT ST_Intersects(c.geom, b.geom)"""), 0)
+
+    def test_people_add_up(self):
+        # Every resident of 2019 is either in an outline or in an issue.
+        self.assertEqual(self.scalar("""
+            SELECT (SELECT sum(people) FROM city.building_residents)
+                 - (SELECT sum(people_2019) FROM city.buildings)
+                 - (SELECT coalesce(sum(people), 0) FROM city.buildings_2019 WHERE match = 'none')"""), 0)
+
+    def test_2019_aggregates_match_the_link(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.buildings c
+             WHERE c.buildings_2019 <> (SELECT count(*) FROM city.buildings_2019 b
+                                         WHERE b.building_id = c.id)"""), 0)
+
+    def test_floors_only_when_a_whole_number(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.buildings
+             WHERE floors IS NOT NULL AND floors_text::text !~ '^-?[0-9]+$'
+                OR floors = 0"""), 0)
+
+    def test_every_function_has_a_category(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.buildings
+             WHERE (function IS NULL) <> (category IS NULL)"""), 0)
+
+    def test_buildings_lie_in_a_district(self):
+        # The outlines cover the municipality only; a few may sit on the
+        # boundary, but not many.
+        self.assertLess(self.scalar(
+            "SELECT count(*) FROM city.buildings WHERE district_code IS NULL"), 100)
+
+    def test_area_totals_add_up(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.area_buildings a
+             WHERE a.area_kind = 'city'
+               AND a.buildings <> (SELECT count(*) FROM city.buildings)"""), 0)
