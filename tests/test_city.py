@@ -637,3 +637,56 @@ class BuildingsTest(unittest.TestCase):
             SELECT count(*) FROM city.area_buildings a
              WHERE a.area_kind = 'city'
                AND a.buildings <> (SELECT count(*) FROM city.buildings)"""), 0)
+
+
+class CensusTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.census_addresses").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.census_addresses is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_withheld_counts_are_null_not_negative(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.census_addresses
+             WHERE least(people, dwellings, male, female, age_0_14, age_65_plus,
+                         edu_1, edu_2, edu_3, edu_4, edu_5, born_bg, born_eu, born_non_eu) < 0"""), 0)
+
+    def test_sexes_and_ages_add_up_to_the_people(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.census_addresses
+             WHERE people <> male + female
+                OR people <> age_0_14 + age_15_24 + age_25_34 + age_35_44
+                             + age_45_54 + age_55_64 + age_65_plus"""), 0)
+
+    def test_people_total_as_in_the_source(self):
+        self.assertEqual(self.scalar("SELECT sum(people) FROM city.census_addresses"), 1177165)
+
+    def test_match_agrees_with_the_link(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.census_addresses
+             WHERE (match = 'none') <> (building_id IS NULL)
+                OR (match = 'nearest' AND NOT distance_m <= 20)
+                OR (match = 'none' AND NOT distance_m >= 20)  -- rounded to 0.1 m
+                OR (match = 'inside') <> (distance_m IS NULL)"""), 0)
+
+    def test_shares_are_shares(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.area_census
+             WHERE NOT (census_share_0_14 BETWEEN 0 AND 1) OR NOT (census_share_65_plus BETWEEN 0 AND 1)
+                OR NOT (higher_education_share BETWEEN 0 AND 1) OR NOT (born_abroad_share BETWEEN 0 AND 1)"""), 0)
+
+    def test_district_totals_add_up_to_the_city(self):
+        self.assertEqual(self.scalar("""
+            SELECT (SELECT census_people FROM city.area_census WHERE area_kind = 'city')
+                 - (SELECT sum(census_people) FROM city.area_census WHERE area_kind = 'district')
+                 - (SELECT coalesce(sum(people), 0) FROM city.census_addresses WHERE district_code IS NULL)"""), 0)

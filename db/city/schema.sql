@@ -1110,3 +1110,115 @@ SELECT area_kind, area_id,
   FROM levels
  WHERE area_id IS NOT NULL
  GROUP BY area_kind, area_id;
+
+-- ------------------------------------------------------ census addresses
+--
+-- NSI's 2011 census, summed by address and geocoded by Sofiaplan
+-- (2018-02-27). One row per address point. Filled by census.sql.
+-- Counts NSI withheld (-1 in the source, small numbers kept back for
+-- privacy) are NULL, so sums of them are lower bounds. The dwelling
+-- fields nj12_*, nj16_* and nj17_* are not loaded: nothing says what
+-- their codes mean.
+CREATE TABLE IF NOT EXISTS census_addresses (
+    id               integer PRIMARY KEY,     -- id in the source
+    nsi_building_id  text,
+    street           text,
+    street_code      text,
+    number           text,                    -- e.g. 12, 5А
+    settlement_code  text,                    -- EKATTE; 68134 is Sofia
+    district_label   text,                    -- ecode_rayon in the source
+    people           integer,                 -- NULL: no residents given
+    dwellings        integer,
+    male             integer,
+    female           integer,
+    age_0_14         integer,
+    age_15_24        integer,
+    age_25_34        integer,
+    age_35_44        integer,
+    age_45_54        integer,
+    age_55_64        integer,
+    age_65_plus      integer,
+    -- Education, "from higher down to basic and lower" in the dataset
+    -- description: edu_1 higher, edu_2 secondary, the rest lower; the
+    -- exact levels are not documented. Only people aged 7 and over.
+    edu_1            integer,
+    edu_2            integer,
+    edu_3            integer,
+    edu_4            integer,
+    edu_5            integer,
+    -- Country of birth (ncob_*): Bulgaria, another EU country, elsewhere.
+    born_bg          integer,
+    born_eu          integer,
+    born_non_eu      integer,
+    built_year       integer,
+    -- The cadastre outline the point lies in, or the nearest within 20 m.
+    building_id      integer REFERENCES buildings(id) ON DELETE SET NULL,
+    match            text NOT NULL CHECK (match IN ('inside', 'nearest', 'none')),
+    distance_m       numeric,
+    geom             geometry(Point, 4326) NOT NULL,
+    district_code    text REFERENCES districts(code),
+    neighbourhood_id integer REFERENCES neighbourhoods(id),
+    planning_unit_id integer REFERENCES planning_units(id),
+    data_as_of       date NOT NULL,
+    source_dataset   text NOT NULL,
+    source_fid       text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS census_addresses_geom_idx ON census_addresses USING gist (geom);
+CREATE INDEX IF NOT EXISTS census_addresses_building_idx ON census_addresses (building_id);
+
+CREATE OR REPLACE VIEW census_issues AS
+SELECT 'census address outside every district' AS issue, a.id AS address_id,
+       format('%s %s, %s people', a.street, a.number, a.people) AS detail, a.geom
+  FROM census_addresses a WHERE a.district_code IS NULL
+UNION ALL
+SELECT 'census address in another district than its code', a.id,
+       format('%s %s: code %s, lies in %s (%s)', a.street, a.number, a.district_label,
+              a.district_code, d.name), a.geom
+  FROM census_addresses a JOIN districts d ON d.code = a.district_code
+ WHERE a.district_label IS DISTINCT FROM a.district_code
+UNION ALL
+SELECT 'inhabited census address without a building outline', a.id,
+       format('%s %s, %s people, nearest outline %s m away', a.street, a.number,
+              a.people, round(a.distance_m)), a.geom
+  FROM census_addresses a WHERE a.match = 'none' AND a.people > 0
+UNION ALL
+SELECT 'NSI building id used by several addresses', a.id,
+       format('%s %s, building %s', a.street, a.number, a.nsi_building_id), a.geom
+  FROM census_addresses a
+ WHERE a.nsi_building_id IN (SELECT nsi_building_id FROM census_addresses
+                              GROUP BY nsi_building_id HAVING count(*) > 1);
+
+-- Residents by area, 2011 census, next to Sofiaplan's 2019 count (which
+-- the rest of the measures weigh by). Shares of withheld counts are of
+-- the addresses where the count is given.
+CREATE OR REPLACE VIEW area_census AS
+WITH levels AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, a.* FROM census_addresses a
+    UNION ALL SELECT 'district', a.district_code, a.* FROM census_addresses a
+    UNION ALL SELECT 'neighbourhood', a.neighbourhood_id::text, a.* FROM census_addresses a
+    UNION ALL SELECT 'planning_unit', a.planning_unit_id::text, a.* FROM census_addresses a
+), r AS (
+    SELECT 'city' AS area_kind, 'all' AS area_id, sum(people) AS people FROM building_residents
+    UNION ALL SELECT 'district', district_code, sum(people) FROM building_residents GROUP BY district_code
+    UNION ALL SELECT 'neighbourhood', neighbourhood_id::text, sum(people) FROM building_residents GROUP BY neighbourhood_id
+    UNION ALL SELECT 'planning_unit', planning_unit_id::text, sum(people) FROM building_residents GROUP BY planning_unit_id
+), c AS (
+    SELECT area_kind, area_id,
+           sum(people) AS census_people,
+           sum(dwellings) AS census_dwellings,
+           round(sum(people)::numeric / nullif(sum(dwellings) FILTER (WHERE people IS NOT NULL), 0), 2) AS people_per_dwelling,
+           round(sum(age_0_14)::numeric / nullif(sum(people), 0), 3) AS census_share_0_14,
+           round(sum(age_65_plus)::numeric / nullif(sum(people), 0), 3) AS census_share_65_plus,
+           round(sum(edu_1) FILTER (WHERE edu_2 + edu_3 + edu_4 + edu_5 IS NOT NULL)::numeric
+                 / nullif(sum(edu_1 + edu_2 + edu_3 + edu_4 + edu_5), 0), 3) AS higher_education_share,
+           round(sum(born_eu + born_non_eu) FILTER (WHERE born_bg IS NOT NULL)::numeric
+                 / nullif(sum(born_bg + born_eu + born_non_eu), 0), 3) AS born_abroad_share,
+           round((percentile_cont(0.5) WITHIN GROUP (ORDER BY built_year)
+                  FILTER (WHERE people > 0))::numeric) AS median_built_year
+      FROM levels
+     WHERE area_id IS NOT NULL
+     GROUP BY area_kind, area_id
+)
+SELECT c.*, r.people AS residents_2019,
+       round(r.people::numeric / nullif(c.census_people, 0), 3) AS residents_2019_vs_census
+  FROM c LEFT JOIN r USING (area_kind, area_id);
