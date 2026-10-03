@@ -3,17 +3,18 @@
 // LLM from a question) can be checked against the layers, area kinds and
 // metrics we actually have before they are shown.
 
-const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Population', 'Technical'];
+const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Population', 'Buildings', 'Technical'];
 
 // Keys of the layer toggles in the sidebar (data-key).
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
                       'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools',
-                      'transit-stops', 'transit-routes'];
+                      'transit-stops', 'transit-routes', 'buildings'];
 const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 
 // Planned parks stay off: they are master plan zones, much of it forest.
-// So does public transport: 3,500 stops and 140 lines would bury the rest.
-const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes'].includes(k));
+// So does public transport: 3,500 stops and 140 lines would bury the rest,
+// and so do the 265,000 buildings.
+const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'buildings'].includes(k));
 
 const FOCUSES = [
   { id: 'overview', category: null, title: 'Overview',
@@ -85,6 +86,37 @@ const FOCUSES = [
   { id: 'density', category: 'Population', title: 'Population density',
     question: 'Where do the residents live? Residents per km² of each planning unit (2019).',
     layers: [], areas: { kind: 'planning_unit', metric: 'density' },
+    list: 'areas', drawer: 'open' },
+  { id: 'ageing', category: 'Population', title: 'Older residents',
+    question: 'Where did the most people aged 65 and over live at the 2011 census?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'census_share_65_plus' },
+    list: 'areas', drawer: 'open' },
+  { id: 'children-2011', category: 'Population', title: 'Children (census)',
+    question: 'Where were children aged 0–14 the largest share of residents in 2011?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'census_share_0_14' },
+    list: 'areas', drawer: 'open' },
+  { id: 'education-level', category: 'Population', title: 'Higher education',
+    question: 'What share of residents had a university degree at the 2011 census?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'higher_education_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'born-abroad', category: 'Population', title: 'Born abroad',
+    question: 'Where did residents born outside Bulgaria live in 2011?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'born_abroad_share' },
+    list: 'areas', drawer: 'open' },
+  { id: 'population-change', category: 'Population', title: 'Change since the census',
+    question: 'Where did the 2019 building data count more or fewer residents than the 2011 census?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'residents_2019_vs_census' },
+    list: 'areas', drawer: 'open' },
+  { id: 'buildings', category: 'Buildings', title: 'Buildings',
+    question: 'What is each building used for, who lives in it, and is it a panel block or being renovated?',
+    layers: ['buildings'], areas: null, list: 'areas', drawer: 'folded', minZoom: 15 },
+  { id: 'building-age', category: 'Buildings', title: 'Age of the housing',
+    question: 'In which neighbourhoods were the homes built, by the median year of the census addresses?',
+    layers: [], areas: { kind: 'neighbourhood', metric: 'median_built_year' },
+    list: 'areas', drawer: 'open' },
+  { id: 'building-height', category: 'Buildings', title: 'Height of the housing',
+    question: 'How many floors do residential buildings have on average in each planning unit?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'residential_mean_floors' },
     list: 'areas', drawer: 'open' },
   { id: 'data-issues', category: 'Technical', title: 'Data issues',
     question: 'Where are the source data missing, wrong, or in disagreement with each other?',

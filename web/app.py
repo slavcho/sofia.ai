@@ -428,6 +428,108 @@ def transit_issues():
     """)
 
 
+@app.get("/api/buildings/tiles/{z}/{x}/{y}.pbf")
+def building_tiles(z: int = PathParam(ge=15, le=22), x: int = PathParam(ge=0), y: int = PathParam(ge=0)):
+    # 265,000 outlines are too many for one GeoJSON, so vector tiles,
+    # drawn from zoom 15 (a zoom 14 tile is 250 kB). The panel blocks, renovations and BREEAM
+    # certificates are flags here; the card has the details.
+    with psycopg.connect(DSN, options="-c search_path=city,public") as conn:
+        (body,) = conn.execute("""
+            WITH t AS (SELECT ST_TileEnvelope(%(z)s, %(x)s, %(y)s) AS env),
+            b AS (
+              SELECT b.id, b.category, b.floors, b.municipal, b.people_2019,
+                     (SELECT sum(c.people) FROM census_addresses c WHERE c.building_id = b.id) AS people_2011,
+                     EXISTS (SELECT FROM panel_buildings p WHERE p.building_id = b.id) AS panel,
+                     EXISTS (SELECT FROM renovations r WHERE r.building_id = b.id) AS renovated,
+                     EXISTS (SELECT FROM breeam_buildings e WHERE e.building_id = b.id) AS breeam,
+                     s.shaded_mean,
+                     ST_AsMVTGeom(ST_Transform(b.geom, 3857), t.env, 4096, 16) AS geom
+                FROM buildings b
+               CROSS JOIN t
+                LEFT JOIN building_shading s ON s.building_id = b.id
+               WHERE b.geom && ST_Transform(t.env, 4326))
+            SELECT ST_AsMVT(b, 'buildings', 4096, 'geom', 'id') FROM b
+        """, {"z": z, "x": x, "y": y}).fetchone()
+    return Response(content=bytes(body or b""), media_type="application/vnd.mapbox-vector-tile",
+                     headers={"Cache-Control": "max-age=3600"})
+
+
+@app.get("/api/buildings/{building_id}")
+def building(building_id: int):
+    # One outline of the cadastral plan with everything tied to it: the
+    # 2019 buildings, the 2011 census addresses, panel block, renovation,
+    # BREEAM certificate, shading and data issues.
+    return json_query("""
+        SELECT (SELECT json_build_object(
+                    'id', b.id, 'function', b.function, 'category', b.category,
+                    'ownership', b.ownership, 'municipal', b.municipal,
+                    'municipal_part', b.municipal_part,
+                    'floors', b.floors, 'floors_text', b.floors_text,
+                    'footprint_m2', b.footprint_m2, 'region_label', b.region_label,
+                    'district', (SELECT d.name FROM districts d WHERE d.code = b.district_code),
+                    'neighbourhood_id', b.neighbourhood_id,
+                    'neighbourhood', (SELECT n.name FROM neighbourhoods n WHERE n.id = b.neighbourhood_id),
+                    'planning_unit_id', b.planning_unit_id,
+                    'sofiaplan', (SELECT json_agg(json_build_object(
+                                      'id', s.id, 'match', s.match, 'distance_m', s.distance_m,
+                                      'cadastre_ref', s.cadastre_ref, 'people', s.people,
+                                      'households', s.households, 'apartments', s.apartments,
+                                      'floors', s.floors, 'built_year', s.built_year) ORDER BY s.id)
+                                    FROM buildings_2019 s WHERE s.building_id = b.id),
+                    'census', (SELECT json_agg(json_build_object(
+                                   'id', c.id, 'address', concat_ws(' ', c.street, c.number),
+                                   'match', c.match, 'distance_m', c.distance_m,
+                                   'people', c.people, 'dwellings', c.dwellings,
+                                   'age_0_14', c.age_0_14, 'age_65_plus', c.age_65_plus,
+                                   'edu_1', c.edu_1, 'built_year', c.built_year) ORDER BY c.street, c.number)
+                                 FROM census_addresses c WHERE c.building_id = b.id),
+                    'panel', (SELECT json_agg(json_build_object(
+                                  'system', p.panel_system, 'people', p.people,
+                                  'apartments', p.apartments, 'floors', p.floors))
+                                FROM panel_buildings p WHERE p.building_id = b.id),
+                    'renovations', (SELECT json_agg(json_build_object(
+                                        'id', r.id, 'status', r.status, 'stage', r.stage,
+                                        'address', r.address, 'association', r.association,
+                                        'match', r.match))
+                                      FROM renovations r WHERE r.building_id = b.id),
+                    'breeam', (SELECT json_agg(json_build_object(
+                                   'name', e.name, 'title', e.title, 'stage', e.stage,
+                                   'distance_m', e.distance_m))
+                                 FROM breeam_buildings e WHERE e.building_id = b.id),
+                    'shading', (SELECT row_to_json(s) FROM building_shading s WHERE s.building_id = b.id),
+                    'issues', (SELECT json_agg(json_build_object('issue', i.issue, 'detail', i.detail))
+                                 FROM building_issues i WHERE i.cadastre_id = b.id),
+                    'bbox', json_build_array(ST_XMin(b.geom), ST_YMin(b.geom),
+                                             ST_XMax(b.geom), ST_YMax(b.geom)),
+                    'data_as_of', b.data_as_of,
+                    'source', b.source_dataset || ' #' || b.source_fid)
+                  FROM buildings b
+                 WHERE b.id = %(id)s)::text
+    """, {"id": building_id})
+
+
+@app.get("/api/buildings-issues")
+def building_issues():
+    # The cadastre's, the census's and the attached registers' issues, at
+    # a point; those with an outline open its card.
+    return json_query("""
+        SELECT coalesce(json_agg(json_build_object(
+                   'issue', i.issue, 'detail', i.detail, 'source', i.source,
+                   'building_id', i.cadastre_id,
+                   'lon', round(ST_X(i.pt)::numeric, 6), 'lat', round(ST_Y(i.pt)::numeric, 6))
+                   ORDER BY i.source, i.issue, i.detail), '[]')::text
+          FROM (SELECT 'Buildings' AS source, issue, detail, cadastre_id, ST_PointOnSurface(geom) AS pt
+                  FROM building_issues
+                UNION ALL
+                SELECT 'Census 2011', issue, detail, NULL, geom FROM census_issues
+                UNION ALL
+                SELECT 'Buildings', e.issue, e.detail,
+                       (SELECT b.id FROM buildings b WHERE ST_Intersects(b.geom, e.geom) LIMIT 1),
+                       ST_PointOnSurface(e.geom)
+                  FROM building_extra_issues e) i
+    """)
+
+
 # Area kinds: table, key column, the table linking the area to the
 # districts it lies in (none for a district), and kind-specific fields.
 AREAS = {
@@ -498,7 +600,17 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                        'sunday_share', t.sunday_share,
                        'night_share', t.night_share,
                        'median_peak_per_hour', t.median_peak_per_hour,
-                       'sofiaplan_transit_share_400', t.sofiaplan_transit_share_400)) AS feature
+                       'sofiaplan_transit_share_400', t.sofiaplan_transit_share_400,
+                       'census_people', n.census_people,
+                       'people_per_dwelling', n.people_per_dwelling,
+                       'census_share_0_14', n.census_share_0_14,
+                       'census_share_65_plus', n.census_share_65_plus,
+                       'higher_education_share', n.higher_education_share,
+                       'born_abroad_share', n.born_abroad_share,
+                       'median_built_year', n.median_built_year,
+                       'residents_2019_vs_census', n.residents_2019_vs_census,
+                       'residential_mean_floors', b.residential_mean_floors,
+                       'floor_area_per_resident', round(b.floor_area_m2 / nullif(a.population, 0)))) AS feature
           FROM {a['table']} a
           LEFT JOIN area_metro_access m
                  ON m.area_kind = %(kind)s AND m.area_id = a.{a['key']}::text
@@ -514,6 +626,10 @@ def areas(kind: str = PathParam(pattern=AREA_KIND)):
                  ON c.area_kind = %(kind)s AND c.area_id = a.{a['key']}::text
           LEFT JOIN area_transit_access t
                  ON t.area_kind = %(kind)s AND t.area_id = a.{a['key']}::text
+          LEFT JOIN area_census n
+                 ON n.area_kind = %(kind)s AND n.area_id = a.{a['key']}::text
+          LEFT JOIN area_buildings b
+                 ON b.area_kind = %(kind)s AND b.area_id = a.{a['key']}::text
          ORDER BY a.{a['key']}
     """), {"kind": kind})
 
@@ -553,6 +669,10 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                           WHERE c.area_kind = %(kind)s AND c.area_id = a.{a['key']}::text),
                     'transit_access', (SELECT row_to_json(t) FROM area_transit_access t
                                         WHERE t.area_kind = %(kind)s AND t.area_id = a.{a['key']}::text),
+                    'census', (SELECT row_to_json(n) FROM area_census n
+                                WHERE n.area_kind = %(kind)s AND n.area_id = a.{a['key']}::text),
+                    'buildings', (SELECT row_to_json(b) FROM area_buildings b
+                                   WHERE b.area_kind = %(kind)s AND b.area_id = a.{a['key']}::text),
                     'districts', {districts},
                     'issues', (SELECT json_agg(json_build_object('issue', i.issue, 'detail', i.detail))
                                  FROM area_issues i

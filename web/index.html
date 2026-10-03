@@ -152,6 +152,7 @@
   <label class="toggle"><input type="checkbox" data-key="schools" data-layers="schools" checked> Schools</label>
   <label class="toggle"><input type="checkbox" data-key="transit-stops" data-layers="transit-stops"> Public transport stops</label>
   <label class="toggle"><input type="checkbox" data-key="transit-routes" data-layers="transit-routes"> Public transport lines</label>
+  <label class="toggle"><input type="checkbox" data-key="buildings" data-layers="buildings-fill,buildings-line"> Buildings</label>
   </details>
 
   <!-- Each legend shows only while one of its layers is drawn on screen. -->
@@ -198,6 +199,11 @@
   <div data-legend="transit-routes" hidden>
   <h2>Public transport lines</h2>
   <div id="transit-route-legend" class="legend"></div>
+  </div>
+
+  <div data-legend="buildings-fill" hidden>
+  <h2>Buildings (cadastral plan)</h2>
+  <div id="building-legend" class="legend"></div>
   </div>
 
 
@@ -247,6 +253,11 @@ const STOP_BREAKS = [4, 12, 30, 60];
 // The colours the timetable gives the lines (routes.txt).
 const MODE_COLORS = { bus: '#BE1E2D', trolleybus: '#27AAE1', tram: '#F7941D', metro: '#1C75BC', night: '#000000' };
 const MODE_LABEL = { bus: 'bus', trolleybus: 'trolleybus', tram: 'tram', metro: 'metro' };
+// Buildings by our grouping of the cadastre's functions (buildings.sql).
+const BUILDING_COLORS = { residential: '#d9a66c', ancillary: '#d4d0c8', industry: '#8c96a6',
+                          commercial: '#e07b91', public: '#9e7bb5', education: '#6a51a3',
+                          health: '#d93a3a', utility: '#5a7d9a', transport: '#4a90c2',
+                          agriculture: '#9ab973', other: '#b8b2a7', none: '#e4e1db' };
 const NOTHING = ['boolean', false];   // a filter that hides every feature
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // MapLibre hands array properties back as JSON strings.
@@ -306,6 +317,17 @@ const METRICS = {
   sofiaplan_transit_share_400: { label: 'Public transport: Sofiaplan, 400 m on foot (2021)', breaks: PCT, colors: TRANSIT, pct: true },
   density:            { label: 'Residents per km²', breaks: [1000, 3000, 6000, 10000],
                         colors: ['#feedde', '#fdbe85', '#fd8d3c', '#e6550d', '#a63603'] },
+  census_share_65_plus: { label: 'Census 2011: aged 65 and over', breaks: [0.1, 0.15, 0.2, 0.25], colors: PURPLE, pct: true },
+  census_share_0_14:  { label: 'Census 2011: aged 0–14', breaks: [0.08, 0.11, 0.14, 0.17], colors: ORANGE, pct: true },
+  higher_education_share: { label: 'Census 2011: higher education (of those with it given)',
+                        breaks: [0.15, 0.25, 0.35, 0.5], colors: ACCESS, pct: true },
+  born_abroad_share:  { label: 'Census 2011: born abroad', breaks: [0.005, 0.01, 0.02, 0.04], colors: GREEN, pct: true },
+  people_per_dwelling: { label: 'Census 2011: residents per dwelling', breaks: [1.8, 2.1, 2.4, 2.8], colors: ORANGE },
+  median_built_year:  { label: 'Census 2011: median year built (by address)', breaks: [1950, 1965, 1980, 1995],
+                        colors: ['#a63603', '#e6550d', '#fd8d3c', '#fdbe85', '#feedde'], plain: true },
+  residents_2019_vs_census: { label: 'Residents 2019 per resident of the census 2011', breaks: [0.8, 0.95, 1.05, 1.2],
+                        colors: ['#ca0020', '#f4a582', '#f7f7f7', '#92c5de', '#0571b0'] },
+  residential_mean_floors: { label: 'Mean floors of residential buildings', breaks: [2, 4, 6, 9], colors: PURPLE },
 };
 // Below this a share says more about one building than about the area.
 const MIN_PEOPLE = 100;
@@ -347,6 +369,8 @@ map.on('load', async () => {
   map.addSource('schools', { type: 'geojson', data: sc });
   map.addSource('transit-stops', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('transit-routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addSource('buildings', { type: 'vector', minzoom: 15, maxzoom: 16,
+                               tiles: [location.origin + '/api/buildings/tiles/{z}/{x}/{y}.pbf'] });
 
   // Areas go under everything else, so stations stay clickable on top.
   map.addLayer({ id: 'areas-fill', type: 'fill', source: 'areas',
@@ -359,6 +383,17 @@ map.on('load', async () => {
   // Parks over the areas, under the metro. Planned parks are hidden at
   // first: they are master plan zones, much of it forest and fields.
   const parkColor = ['match', ['get', 'kind'], ...Object.entries(PARK_COLORS).flat(), PARK_COLORS.unclassified];
+  map.addLayer({ id: 'buildings-fill', type: 'fill', source: 'buildings', 'source-layer': 'buildings',
+    minzoom: 15, layout: { visibility: 'none' },
+    paint: { 'fill-color': ['match', ['coalesce', ['get', 'category'], 'none'],
+                            ...Object.entries(BUILDING_COLORS).flat(), BUILDING_COLORS.other],
+             'fill-opacity': 0.85 } });
+  map.addLayer({ id: 'buildings-line', type: 'line', source: 'buildings', 'source-layer': 'buildings',
+    minzoom: 15, layout: { visibility: 'none' },
+    paint: { 'line-color': ['case', ['get', 'renovated'], '#2ba84a', ['get', 'panel'], '#555', '#8a8578'],
+             'line-width': ['case', ['any', ['get', 'renovated'], ['get', 'panel']], 1.6, 0.4] } });
+  map.addLayer({ id: 'buildings-selected', type: 'line', source: 'buildings', 'source-layer': 'buildings',
+    filter: NOTHING, paint: { 'line-color': '#111', 'line-width': 2.5 } });
   map.addLayer({ id: 'parks-fill', type: 'fill', source: 'parks', filter: ['==', ['get', 'status'], 'existing'],
     paint: { 'fill-color': parkColor,
              'fill-opacity': ['case', ['==', ['get', 'status'], 'planned'], 0.15, 0.45] } });
@@ -443,10 +478,12 @@ map.on('load', async () => {
   renderParkLegend();
   renderEducationLegend();
   renderTransitLegend();
+  renderBuildingLegend();
   const tag = (list, source) => list.map(i => ({ ...i, source }));
   renderIssues([...tag(issues, 'Metro'), ...tag(areaIssues, 'Areas'), ...tag(parkIssues, 'Parks'),
                 ...tag(eduIssues, 'Kindergartens and schools'), ...tag(catchmentIssues, 'School catchments'),
                 ...tag(transitIssues, 'Public transport')]);
+  getJSON('/api/buildings-issues').then(b => renderIssues([...allIssues, ...b])).catch(() => {});
   bindToggles();
   paintAreas();
   bindList();
@@ -503,14 +540,20 @@ map.on('load', async () => {
     map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   }
+  map.on('click', 'buildings-fill', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS] }).length) return;
+    selectBuilding(e.features[0].id);
+  });
+  map.on('mouseenter', 'buildings-fill', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'buildings-fill', () => map.getCanvas().style.cursor = '');
   map.on('click', 'areas-fill', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'parks-fill'] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, ...TRANSIT_LAYERS, 'parks-fill', 'buildings-fill'] }).length) return;
     selectArea(areaKind, e.features[0].properties.id);
   });
 
   // ?station=<id>, ?entrance=<id>, ?park=<id>, ?park_entrance=<id>,
   // ?kindergarten=<id>, ?school=<id>, ?transit_stop=<id>,
-  // ?transit_route=<id> or ?area=<kind>:<id> opens the page
+  // ?transit_route=<id>, ?building=<id> or ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
   applyFocus(q.get('focus') || 'overview');
@@ -522,6 +565,7 @@ map.on('load', async () => {
   else if (q.has('school')) selectSchool(+q.get('school'), false);
   else if (q.has('transit_stop')) selectTransitStop(q.get('transit_stop'), false);
   else if (q.has('transit_route')) selectTransitRoute(q.get('transit_route'), false);
+  else if (q.has('building')) selectBuilding(+q.get('building'), false);
   else if (q.has('area')) { const [k, id] = q.get('area').split(':'); selectArea(k, id, false); }
 });
 
@@ -615,6 +659,14 @@ function renderEducationLegend() {
   document.getElementById('school-legend').innerHTML = legend(SCHOOL_COLORS, 'no classes in the data', 0.5);
 }
 
+function renderBuildingLegend() {
+  document.getElementById('building-legend').innerHTML =
+    Object.entries(BUILDING_COLORS).map(([k, c]) =>
+      `<span><i class="swatch" style="background:${c}"></i>${k === 'none' ? 'no function' : k}</span>`).join('') +
+    `<span><i class="swatch" style="border:2px solid #555"></i>panel block</span>
+     <span><i class="swatch" style="border:2px solid #2ba84a"></i>in the renovation register</span>`;
+}
+
 function renderTransitLegend() {
   const labels = STOP_BREAKS.map((b, i) => i ? `${STOP_BREAKS[i - 1]}–${b}` : `< ${b}`).concat(`≥ ${STOP_BREAKS.at(-1)}`);
   document.getElementById('transit-stop-legend').innerHTML =
@@ -672,6 +724,14 @@ function openIssue(i) {
   else if (i.kindergarten_id) selectKindergarten(i.kindergarten_id); else if (i.school_id) selectSchool(i.school_id);
   else if (i.station_id) selectStation(i.station_id); else if (i.entrance_id) selectEntrance(i.entrance_id);
   else if (i.stop_id) selectTransitStop(i.stop_id); else if (i.route_id) selectTransitRoute(i.route_id);
+  else if (i.building_id) selectBuilding(i.building_id);
+  // Census addresses and buildings without an outline: just the place.
+  else if (i.lon != null) {
+    clearSelection();
+    if (!document.querySelector('input[data-key="buildings"]').checked)
+      document.querySelector('input[data-key="buildings"]').click();
+    highlight([[i.lon, i.lat]]); moveTo([i.lon, i.lat], 17);
+  }
 }
 
 function updateLegends() {
@@ -720,7 +780,7 @@ function paintAreas() {
   map.setPaintProperty('areas-fill', 'fill-color',
     ['case', ['<', ['coalesce', ['get', 'population'], 0], MIN_PEOPLE], NO_DATA,
              ['step', ['coalesce', ['get', key], 0], ...steps]]);
-  const fmt = v => m.pct ? Math.round(v * 100) + '%' : Number(v).toLocaleString();
+  const fmt = v => m.pct ? Math.round(v * 100) + '%' : m.plain ? String(v) : Number(v).toLocaleString();
   const labels = m.colors.map((_, i) =>
     i === 0 ? '< ' + fmt(m.breaks[0]) : i === m.colors.length - 1 ? '≥ ' + fmt(m.breaks[i - 1])
             : fmt(m.breaks[i - 1]) + '–' + fmt(m.breaks[i]));
@@ -744,6 +804,7 @@ function select(kind, id) {
   else highlight([]);
   if (kind !== 'park') map.setFilter('parks-selected', NOTHING);
   if (kind !== 'transit_route') map.setFilter('transit-routes-selected', NOTHING);
+  if (kind !== 'building') map.setFilter('buildings-selected', NOTHING);
   showCatchment([]);
 }
 
@@ -757,6 +818,7 @@ function clearSelection() {
   map.setFilter('areas-selected', NOTHING);
   map.setFilter('parks-selected', NOTHING);
   map.setFilter('transit-routes-selected', NOTHING);
+  map.setFilter('buildings-selected', NOTHING);
   document.getElementById('selected').hidden = true;
   document.getElementById('info').innerHTML = '';
 }
@@ -913,6 +975,22 @@ async function selectArea(kind, id, animate) {
     ${t.sofiaplan_transit_share_400 != null ? `<div class="sub" style="margin-top:6px">Sofiaplan (2021, 400 m on foot):
       ${pct(t.sofiaplan_transit_share_400)} of residents near a stop; we find ${pct(t.transit_share_400)}.</div>` : ''}`)(a.transit_access)
       : '<div class="empty">No residents in the 2019 building data.</div>'}
+    <h4>Buildings and the 2011 census</h4>
+    ${a.buildings ? (b => `<div class="sub">${num(b.buildings)} outlines in the cadastral plan, ${num(b.residential_buildings)}
+      residential (mean ${num(b.residential_mean_floors)} floors), ${num(b.municipal_buildings)} municipal;
+      ${num(Math.round(b.floor_area_m2 / 1000))} thousand m² of floor area (footprint × floors).</div>`)(a.buildings) : ''}
+    ${a.census && a.census.census_people ? (c => `<table class="access">
+      <tr><td>residents, census 2011</td><td>${num(c.census_people)}</td></tr>
+      <tr><td>residents, 2019</td><td>${num(c.residents_2019)} <span class="sub">${num(c.residents_2019_vs_census)}×</span></td></tr>
+      <tr><td>per dwelling</td><td>${num(c.people_per_dwelling)}</td></tr>
+      <tr><td>aged 0–14</td><td>${pct(c.census_share_0_14)}</td></tr>
+      <tr><td>aged 65 and over</td><td>${pct(c.census_share_65_plus)}</td></tr>
+      <tr><td>higher education</td><td>${pct(c.higher_education_share)}</td></tr>
+      <tr><td>born abroad</td><td>${pct(c.born_abroad_share)}</td></tr>
+      <tr><td>median year built</td><td>${esc(c.median_built_year ?? '—')}</td></tr>
+    </table>
+    <div class="sub">NSI census of 2011 by address; education and birthplace only where NSI gives them
+      (DATA_ISSUES #58).</div>`)(a.census) : '<div class="empty">No census addresses here.</div>'}
     ${a.districts ? `<h4>District${a.districts.length > 1 ? 's' : ''}</h4><ul>` + a.districts.map(d => `<li>
         <a href="#" data-area="district:${esc(d.code)}">${esc(d.name)}</a>
         <span class="sub">${pct(d.share)} of the area · ${num(d.population)} residents${d.main ? ' · main' : ''}</span></li>`).join('') + '</ul>' : ''}
@@ -921,6 +999,61 @@ async function selectArea(kind, id, animate) {
     <dl>
       <dt>Data as of</dt><dd>${esc(a.data_as_of)}</dd>
       <dt>Source</dt><dd>${esc(a.source)} <span class="sub">${esc(AREA_FILE[kind])}</span></dd>
+    </dl>`;
+  document.querySelectorAll('#info a[data-area]').forEach(l => l.onclick = e => {
+    e.preventDefault(); const [k, i] = l.dataset.area.split(':'); selectArea(k, i);
+  });
+}
+
+// A cadastral plan outline, with what the 2019 buildings, the census and
+// the registers say about it.
+async function selectBuilding(id, animate) {
+  select('building', id);
+  highlight([]);
+  const b = await getJSON(`/api/buildings/${id}`).catch(() => null);
+  if (!isSelected('building', id)) return;
+  if (!b) return clearSelection();
+  if (!document.querySelector('input[data-key="buildings"]').checked)
+    document.querySelector('input[data-key="buildings"]').click();
+  map.setFilter('buildings-selected', ['==', ['id'], id]);
+  map.fitBounds(b.bbox, { padding: 80, maxZoom: 17.5, minZoom: 15, animate: animate !== false });
+  const sum = (list, k) => list ? list.reduce((t, x) => t + (x[k] || 0), 0) : null;
+  const sp = b.sofiaplan, cs = b.census, sh = b.shading;
+  document.getElementById('info').innerHTML = `
+    <h3>${esc(b.function || 'Building')} <span class="sub">#${esc(b.id)}</span></h3>
+    <div><i class="swatch" style="background:${BUILDING_COLORS[b.category || 'none']}"></i> ${esc(b.category || 'no function given')}
+         ${b.municipal ? '<span class="status">municipal</span>' : ''}</div>
+    <dl>
+      <dt>Floors</dt><dd>${esc(b.floors_text ?? '—')}</dd>
+      <dt>Footprint</dt><dd>${num(b.footprint_m2)} m²</dd>
+      ${b.ownership ? `<dt>Ownership</dt><dd>${esc(b.ownership)}</dd>` : ''}
+      ${b.municipal_part ? `<dt>Municipal part</dt><dd>${esc(b.municipal_part)}</dd>` : ''}
+      <dt>Area</dt><dd>${esc(b.district || '—')}${b.neighbourhood ? ` · <a href="#" data-area="neighbourhood:${b.neighbourhood_id}">${esc(b.neighbourhood)}</a>` : ''}
+        ${b.planning_unit_id ? ` · <a href="#" data-area="planning_unit:${b.planning_unit_id}">unit ${b.planning_unit_id}</a>` : ''}</dd>
+    </dl>
+    <h4>Residents</h4>
+    <table class="access">
+      <tr><th></th><th>2019</th><th>census 2011</th></tr>
+      <tr><td>residents</td><td>${num(sum(sp, 'people'))}</td><td>${num(sum(cs, 'people'))}</td></tr>
+      <tr><td>dwellings</td><td>${num(sum(sp, 'apartments'))}</td><td>${num(sum(cs, 'dwellings'))}</td></tr>
+      <tr><td>built</td><td>${esc(sp?.[0]?.built_year ?? '—')}</td><td>${esc(cs?.[0]?.built_year ?? '—')}</td></tr>
+    </table>
+    <div class="sub">${sp ? `${sp.length} Sofiaplan building${sp.length > 1 ? 's' : ''} (cadastral № ${sp.map(s => esc(s.cadastre_ref)).join(', ')})` : 'No Sofiaplan building of 2019'};
+      ${cs ? `census addresses: ${cs.map(c => esc(c.address)).join('; ')}` : 'no census address'}.
+      The two may put the same people in neighbouring outlines (DATA_ISSUES #63).</div>
+    ${b.panel ? `<h4>Panel block</h4><div>${b.panel.map(p => `${esc(p.system || 'system not given')}
+        <span class="sub">· ${num(p.apartments)} apartments, ${num(p.floors)} floors (2019)</span>`).join('<br>')}</div>` : ''}
+    ${b.renovations ? `<h4>Renovation register (2020)</h4><ul>${b.renovations.map(r => `<li><span>${esc(r.status)}
+        <span class="sub">· stage ${esc(r.stage ?? '—')} · ${esc(r.address)}</span></span></li>`).join('')}</ul>` : ''}
+    ${b.breeam ? `<h4>BREEAM</h4><div>${b.breeam.map(e => `${esc(e.title || e.name)}
+        <span class="sub">· ${esc(e.stage || '')}</span>`).join('<br>')}</div>` : ''}
+    ${sh ? `<h4>Shade</h4><div class="sub">Mean ${pct(sh.shaded_mean)} shaded over ${num(sh.units_rated)} units
+        (${pct(sh.shaded_min)}–${pct(sh.shaded_max)}); solar model of 2020, period not given (DATA_ISSUES #66).</div>` : ''}
+    ${b.issues ? '<h4>Data issues</h4><ul>' + b.issues.map(i => `<li><span>${esc(i.issue)}
+        <span class="sub">· ${esc(i.detail)}</span></span></li>`).join('') + '</ul>' : ''}
+    <dl>
+      <dt>Data as of</dt><dd>${esc(b.data_as_of)} <span class="sub">(published; archived plan, DATA_ISSUES #51)</span></dd>
+      <dt>Source</dt><dd>${esc(b.source)}</dd>
     </dl>`;
   document.querySelectorAll('#info a[data-area]').forEach(l => l.onclick = e => {
     e.preventDefault(); const [k, i] = l.dataset.area.split(':'); selectArea(k, i);
