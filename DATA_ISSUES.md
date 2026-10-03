@@ -4,7 +4,8 @@ Problems found in the source data of https://urbandata.sofia.bg/, one entry
 per kind of problem. Single rows that show the problem are listed by the
 issue views in the database (`city.metro_issues`, `city.area_issues`,
 `city.park_issues`, `city.education_issues`, `city.catchment_issues`,
-`city.transit_issues`); this
+`city.transit_issues`, `city.building_issues`, `city.census_issues`,
+`city.building_extra_issues`); this
 file records what we know about each kind: where it comes from, what it
 affects, and what we did about it.
 
@@ -72,6 +73,23 @@ When you add an entry, give it the next number and keep the fields.
 | 48 | All stop times are estimates | transit | flagged |
 | 49 | The calendar reaches two years back | transit | not an error |
 | 50 | The live feeds are single snapshots | transit | open |
+| 51 | The cadastral plan is archived and undated | buildings | flagged |
+| 52 | The building layers share no identifier | buildings | worked around |
+| 53 | 2019 building centroids lie outside their outlines | buildings | worked around |
+| 54 | Building functions mix two classifications | buildings | worked around |
+| 55 | Floor counts that are not numbers | buildings | flagged |
+| 56 | Cadastre district labels disagree with location | buildings | flagged |
+| 57 | Outlines smaller than 1 m² | buildings | flagged |
+| 58 | Census counts withheld as -1 | census | worked around |
+| 59 | Census dwelling codes are not documented | census | open |
+| 60 | The census addresses hold 91 % of the 2011 population | census | flagged |
+| 61 | Census address points lie at the street, not the building | census | worked around |
+| 62 | Census district codes disagree with location | census | flagged |
+| 63 | The census and the 2019 buildings put people in different outlines | census | open |
+| 64 | The renovation register has addresses only | buildings | flagged |
+| 65 | Renovation stage codes are not documented | buildings | open |
+| 66 | The shade model's facades and buildings do not link | buildings | open |
+| 67 | The BREEAM layer has no rating | buildings | open |
 
 ## Metro
 
@@ -677,3 +695,195 @@ interpreted by `db/city/transit.sql`.
   says where the vehicles were at one moment, not how punctual they are.
 - **Handling:** not loaded. Punctuality needs the feeds polled over
   weeks.
+
+## Buildings
+
+### 51. The cadastral plan is archived and undated
+
+- **Status:** flagged.
+- **What:** `cad_plan_sgr-zip` is the *archived* cadastral plan: "the
+  content of the cadastral plan before the cadastral map came into
+  force". The portal dates it 08.09.2026, which is when it was
+  published, not what it shows. Buildings put up since are missing: 23
+  of the 34 BREEAM buildings (most of them new) have no outline within
+  30 m, and 466 inhabited buildings of 2019 (17,961 people) have none
+  within 10 m.
+- **Handling:** `city.buildings.data_as_of` is the publication date;
+  the table comment says what it is. Measures weighted by residents
+  still use the 2019 centroids, which do not depend on the outlines.
+- **Check:** `building_issues` ('inhabited building of 2019 missing
+  from the cadastral plan'), `building_extra_issues` ('BREEAM building
+  far from any outline').
+
+### 52. The building layers share no identifier
+
+- **Status:** worked around.
+- **What:** `rn` is a running number in each file (the municipal
+  buildings' rn 655 is not the plan's rn 655), and none of the 7,718
+  municipal outlines is identical to a plan outline. Sofiaplan's 2019
+  buildings carry the cadastral number (`id_kk`), but the plan does not.
+- **Handling:** joined by location: a point inside each municipal
+  outline (6,499 plan outlines are municipal; 894 municipal ones fall in
+  none) and each 2019 centroid (see 53). The plan's outlines do not
+  overlap, so a point lies in at most one.
+
+### 53. 2019 building centroids lie outside their outlines
+
+- **Status:** worked around.
+- **What:** of the 158,684 Sofiaplan buildings, 123,191 centroids lie
+  in a plan outline, 25,582 lie within 10 m of one and 9,911 farther.
+  The two drawings are offset by a few metres in places; some buildings
+  are newer than the plan (51).
+- **Handling:** `buildings_2019.match` is 'inside', 'nearest' (within
+  10 m) or 'none', with the distance. Several 2019 buildings may share
+  one outline (up to 10); the outline gets their sums.
+- **Check:** `building_issues` for the inhabited 'none' ones.
+
+### 54. Building functions mix two classifications
+
+- **Status:** worked around.
+- **What:** 218 different `functional_type` values: an old list in
+  capitals (СГРАДИ ЖИЛИЩНИ, СГРАДИ, ОБСЛУЖВАЩИ И СПОМАГАТЕЛНИ) beside a
+  finer one (Къщи, Сгради многожилищни, Трансформаторни постове), with
+  variants in spelling and spacing. 3,398 buildings have "---".
+- **Handling:** `buildings.category` groups them into 11 categories
+  (residential, ancillary, industry, commercial, public, utility,
+  education, health, transport, agriculture, other) by our own rules in
+  `buildings.sql`; the source value stays in `function`. "---" is NULL.
+- **Check:** `building_issues` ('building without a function').
+
+### 55. Floor counts that are not numbers
+
+- **Status:** flagged.
+- **What:** `numer_of_floors` is text: 1,414 values like "1/2", "2/3",
+  "3/2", "1 1/2" whose meaning is not given (perhaps floors above/below
+  ground, or a half floor), and 4,138 negative ones (-1 to -3), which
+  look like underground-only structures (garages).
+- **Handling:** `floors` is set only for whole numbers, negative kept;
+  the text is in `floors_text`. Floor area estimates use positive
+  floors only.
+- **Check:** `building_issues` ('floor count is not a number').
+
+### 56. Cadastre district labels disagree with location
+
+- **Status:** flagged.
+- **What:** 123 outlines are labelled with a district they do not lie
+  in, mostly at three borders: ПАНЧАРЕВО for buildings in Младост (54),
+  ОВЧА КУПЕЛ in Красна поляна (46), МЛАДОСТ in Искър (22).
+- **Handling:** the district is taken from the location; the label is
+  kept as `region_label`.
+- **Check:** `building_issues` ('district label disagrees with its
+  location').
+
+### 57. Outlines smaller than 1 m²
+
+- **Status:** flagged.
+- **What:** 150 outlines are under 1 m², 21 of them under 0.01 m²:
+  slivers, not buildings.
+- **Handling:** kept, as they are in the source.
+- **Check:** `building_issues` ('outline smaller than 1 m²').
+
+### 64. The renovation register has addresses only
+
+- **Status:** flagged.
+- **What:** the 288 entries of the register (2020-07-03) have no
+  coordinates; addresses are free text in several styles ("УЛ.ЦАР ИВАН
+  АСЕН II № 8-10", "ж.к. Дружба 1, , бл. 167", "ул.,,Черковна № 66\"").
+- **Handling:** found among the census addresses (`census.sql`) by
+  street and number, else by housing estate and block number when only
+  one estate of the district fits. 241 found, 239 of them with an
+  outline; 47 not found.
+- **Check:** `building_extra_issues` ('renovated building not found
+  among the census addresses').
+
+### 65. Renovation stage codes are not documented
+
+- **Status:** open.
+- **What:** `stage_contract` is 1–5 (or empty) for the approved entries,
+  with no explanation; the other date fields are mostly empty.
+- **Handling:** kept as `renovations.stage`; not interpreted.
+
+### 66. The shade model's facades and buildings do not link
+
+- **Status:** open.
+- **What:** `building-solar-irradiance` has buildings (`senki_sgr`, id
+  and elevation only), units by floor (`senki_sos`, 740,487, with
+  `shaded` 0–1) and facade segments (`senki_sos_fasadi`, 2,985,830).
+  The facades' `ap_id` is not the units' `id` (on a sample the shade
+  values do not correlate), and the units' `building_id` is not the
+  `senki_sgr` id in any documented way. What period `shaded` is the
+  share of is not said.
+- **Handling:** unit points are summed per plan outline by location
+  (`building_shading`, 38,317 buildings, 657,427 units); the facades are
+  not loaded.
+
+### 67. The BREEAM layer has no rating
+
+- **Status:** open.
+- **What:** the 34 entries say what and where the building is and its
+  stage (project, under construction, in use), but not the BREEAM
+  rating; most other fields (energy and water savings, materials) are
+  empty.
+- **Handling:** the non-empty fields are kept in `breeam_buildings.details`.
+
+## Census
+
+### 58. Census counts withheld as -1
+
+- **Status:** worked around.
+- **What:** in `population-data`, education and country-of-birth counts
+  are -1 at 62,588 of the 90,897 addresses: small counts that NSI
+  withholds for privacy. Ages and sexes are always given, and add up.
+- **Handling:** -1 is NULL. Shares (higher education, born abroad) are
+  over the addresses where all of their counts are given.
+
+### 59. Census dwelling codes are not documented
+
+- **Status:** open.
+- **What:** the fields `nj12_1..5`, `nj16_eq_1..3` and `nj17_eq_*`
+  describe dwellings (they add up to the dwelling count), probably
+  type, heating and fuel, but no code list is published.
+- **Handling:** not loaded. They would answer how many homes still burn
+  solid fuel.
+
+### 60. The census addresses hold 91 % of the 2011 population
+
+- **Status:** flagged.
+- **What:** the addresses add up to 1,177,165 people; the 2011 census
+  counted 1,291,591 in the Sofia municipality. The rest were presumably
+  not geocoded. Sofiaplan's 2019 buildings hold 1,127,756.
+- **Handling:** `area_census` gives both counts side by side.
+
+### 61. Census address points lie at the street, not the building
+
+- **Status:** worked around.
+- **What:** only 40,430 of the 90,897 address points lie inside a plan
+  outline; most are on the street front.
+- **Handling:** the outline the point is in, else the nearest
+  residential one within 20 m, else the nearest of any kind within
+  20 m (a garage is often the nearest). 1,248 inhabited addresses
+  (20,786 people) have none.
+- **Check:** `census_issues` ('inhabited census address without a
+  building outline').
+
+### 62. Census district codes disagree with location
+
+- **Status:** flagged.
+- **What:** 690 addresses carry a district code (`ecode_rayon`) other
+  than the district they lie in, mostly along borders (Витоша /
+  Панчарево 97, Овча купел 25). 118 addresses share an NSI building id
+  with another.
+- **Check:** `census_issues`.
+
+### 63. The census and the 2019 buildings put people in different outlines
+
+- **Status:** open.
+- **What:** Sofiaplan's 2019 counts are the census counts attached to
+  their own building centroids: where both reach the same outline they
+  agree in 27,659 of 29,849 cases. But 23,469 outlines have census
+  residents (237,382 people) and no 2019 ones, and 3,498 the reverse.
+  Address points and centroids land in neighbouring outlines,
+  especially in blocks of flats with one address and several sections.
+- **Handling:** none yet. Per building, use one source at a time; per
+  area both agree to within a few percent (`area_census`).
+
