@@ -3,7 +3,8 @@
 // LLM from a question) can be checked against the layers, area kinds and
 // metrics we actually have before they are shown.
 
-const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Population', 'Buildings', 'Technical'];
+const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Population', 'Buildings', 'Housing',
+                          'Planning', 'Environment', 'Technical'];
 
 // Keys of the layer toggles in the sidebar (data-key).
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
@@ -118,6 +119,66 @@ const FOCUSES = [
     question: 'How many floors do residential buildings have on average in each planning unit?',
     layers: [], areas: { kind: 'planning_unit', metric: 'residential_mean_floors' },
     list: 'areas', drawer: 'open' },
+  { id: 'school-unserved', category: 'Education', title: 'Schools on foot: Sofiaplan by unit',
+    question: 'What share of residents has no school within walking distance, by planning unit?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'school_unserved_pct' },
+    list: 'areas', drawer: 'open' },
+  { id: 'kindergarten-unserved', category: 'Education', title: 'Kindergartens on foot: Sofiaplan by unit',
+    question: 'What share of residents has no municipal kindergarten within walking distance?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'kindergarten_unserved_pct' },
+    list: 'areas', drawer: 'open' },
+  { id: 'planned-green', category: 'Green spaces', title: 'Planned public green space',
+    question: 'How much of the green space the master plan provides for is meant for public use?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'planned_public_green_pct' },
+    list: 'areas', drawer: 'open' },
+  { id: 'population-forecast', category: 'Population', title: 'Population forecast 2030',
+    question: 'Where will the population grow or shrink by 2030, in Kopralev\'s realistic forecast?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'population_forecast_2030' },
+    list: 'areas', drawer: 'open' },
+  { id: 'renovation', category: 'Buildings', title: 'Energy renovation',
+    question: 'Where has residential floor area been renovated for energy efficiency?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'renovated_gfa_m2' },
+    list: 'areas', drawer: 'open' },
+  { id: 'shading', category: 'Buildings', title: 'Shaded homes',
+    question: 'How much are residential buildings shaded by their neighbours?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'residential_shaded_mean' },
+    list: 'areas', drawer: 'open' },
+  { id: 'apartment-prices', category: 'Housing', title: 'Apartment prices',
+    question: 'What did apartments cost per m² in 2020, by planning unit?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'apartment_price_m2' },
+    list: 'areas', drawer: 'open' },
+  { id: 'apartment-rents', category: 'Housing', title: 'Apartment rents',
+    question: 'What was the monthly rent per m² of an apartment in 2020?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'apartment_rent_m2' },
+    list: 'areas', drawer: 'open' },
+  { id: 'housing-permits', category: 'Housing', title: 'New housing',
+    question: 'Where were permits for new housing issued from 2010 to 2020?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'residential_permits_since_2010' },
+    list: 'areas', drawer: 'open' },
+  { id: 'growth-room', category: 'Planning', title: 'Room to grow',
+    question: 'How many more residents could the master plan zones house, at 35 m² of floor area each?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'potential_residents' },
+    list: 'areas', drawer: 'open' },
+  { id: 'development-potential', category: 'Planning', title: 'Development potential',
+    question: 'Where do the 2009 master plan zones allow more building than there is?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'development_potential' },
+    list: 'areas', drawer: 'open' },
+  { id: 'heritage', category: 'Planning', title: 'Cultural heritage',
+    question: 'Where are the immovable cultural heritage sites?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'heritage_sites' },
+    list: 'areas', drawer: 'open' },
+  { id: 'sealed-soil', category: 'Environment', title: 'Sealed soil',
+    question: 'How much of the land is covered by buildings, roads and pavement?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'sealed_soil_pct' },
+    list: 'areas', drawer: 'open' },
+  { id: 'solid-fuel', category: 'Environment', title: 'Heating with wood and coal',
+    question: 'Where did households heat with solid fuel at the 2011 census, a source of winter air pollution?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'solid_fuel_households' },
+    list: 'areas', drawer: 'open' },
+  { id: 'sewer', category: 'Technical', title: 'Sewer network',
+    question: 'How much of each planning unit is served by the sewer network?',
+    layers: [], areas: { kind: 'planning_unit', metric: 'sewer_connected_pct' },
+    list: 'areas', drawer: 'open' },
   { id: 'data-issues', category: 'Technical', title: 'Data issues',
     question: 'Where are the source data missing, wrong, or in disagreement with each other?',
     layers: ALL_LAYERS, areas: null, panel: 'issues',
@@ -136,6 +197,8 @@ function checkFocus(f, metrics, lists) {
   if (f.areas) {
     if (!FOCUS_AREA_KINDS.includes(f.areas.kind)) errors.push(`unknown area kind ${f.areas.kind}`);
     if (f.areas.metric && !metrics[f.areas.metric]) errors.push(`unknown metric ${f.areas.metric}`);
+    const kinds = metrics[f.areas.metric]?.kinds;
+    if (kinds && !kinds.includes(f.areas.kind)) errors.push(`metric ${f.areas.metric} is not given by ${f.areas.kind}`);
   }
   if (f.panel && f.panel !== 'issues') errors.push(`unknown panel ${f.panel}`);
   if (f.list && !lists[f.list]) errors.push(`unknown list ${f.list}`);

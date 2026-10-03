@@ -328,7 +328,44 @@ const METRICS = {
   residents_2019_vs_census: { label: 'Residents 2019 per resident of the census 2011', breaks: [0.8, 0.95, 1.05, 1.2],
                         colors: ['#ca0020', '#f4a582', '#f7f7f7', '#92c5de', '#0571b0'] },
   residential_mean_floors: { label: 'Mean floors of residential buildings', breaks: [2, 4, 6, 9], colors: PURPLE },
+  // Sofiaplan's indicators: planning units only, loaded when shown
+  // (loadIndicator); per divides by another indicator of the unit.
+  sealed_soil_pct:    { label: 'Sealed soil, % of the land (2021)', indicator: 'sealed_soil_pct',
+                        breaks: [5, 15, 30, 45], colors: ORANGE },
+  solid_fuel_households: { label: 'Households heating with wood or coal (2011)', indicator: 'solid_fuel_households',
+                        breaks: [10, 50, 200, 500], colors: ORANGE },
+  residential_shaded_mean: { label: 'Shading of residential buildings, 0–1 (2021)', indicator: 'residential_shaded_mean',
+                        breaks: [0.58, 0.6, 0.62, 0.64], colors: PURPLE },
+  renovated_gfa_m2:   { label: 'Energy-renovated residential floor area, m² (2021)', indicator: 'renovated_gfa_m2',
+                        breaks: [1, 2000, 5000, 15000], colors: GREEN },
+  residential_permits_since_2010: { label: 'Residential building permits 2010–2020', indicator: 'residential_permits_since_2010',
+                        breaks: [1, 3, 10, 25], colors: PURPLE },
+  potential_residents: { label: 'Residents the master plan still allows room for (35 m² each)', indicator: 'potential_residents',
+                        breakdown: '35 m²', breaks: [500, 1500, 3000, 6000], colors: ACCESS },
+  development_potential: { label: 'Master plan allows more building', indicator: 'development_potential',
+                        breaks: [2, 3], colors: ['#9ecae1', '#e6550d', '#fdbe85'],
+                        labels: ['no', 'yes', 'in the long-term zones'] },
+  planned_public_green_pct: { label: 'Planned green space for public use, % of the planned green', indicator: 'planned_public_green_pct',
+                        breaks: [20, 40, 60, 80], colors: GREEN },
+  heritage_sites:     { label: 'Immovable cultural heritage sites', indicator: 'heritage_sites',
+                        breaks: [1, 3, 10, 30], colors: PURPLE },
+  apartment_price_m2: { label: 'Apartment asking price per m² (2020, currency not given)', indicator: 'apartment_price_m2',
+                        breakdown: '2020', breaks: [800, 1000, 1200, 1500], colors: PURPLE },
+  apartment_rent_m2:  { label: 'Apartment asking rent per m² a month (2020)', indicator: 'apartment_rent_m2',
+                        breakdown: '2020', breaks: [4, 5, 6, 8], colors: PURPLE },
+  population_forecast_2030: { label: 'Forecast residents 2030 per resident of 2017 (Kopralev, realistic)',
+                        indicator: 'population_forecast', breakdown: '2030', per: 'population_2017',
+                        breaks: [0.95, 1, 1.05, 1.1], colors: ['#ca0020', '#f4a582', '#f7f7f7', '#92c5de', '#0571b0'] },
+  school_unserved_pct: { label: 'Residents with no school on foot, % (Sofiaplan)', indicator: 'school_unserved_pct',
+                        breaks: [1, 10, 30, 60], colors: PURPLE },
+  kindergarten_unserved_pct: { label: 'Residents with no municipal kindergarten on foot, % (Sofiaplan)',
+                        indicator: 'kindergarten_unserved_pct', breaks: [1, 10, 30, 60], colors: ORANGE },
+  sewer_connected_pct: { label: 'Served by the sewer network, %', indicator: 'sewer_connected_pct',
+                        breaks: [25, 50, 75, 95], colors: ACCESS },
+  healthcare_facilities: { label: 'Healthcare facilities', indicator: 'healthcare_facilities',
+                        breaks: [1, 3, 10, 30], colors: ACCESS },
 };
+for (const m of Object.values(METRICS)) if (m.indicator) m.kinds = ['planning_unit'];
 // Below this a share says more about one building than about the area.
 const MIN_PEOPLE = 100;
 const NO_DATA = '#c4c7cc';
@@ -767,6 +804,7 @@ function moveTo(center, zoom, animate) {
 async function setAreaKind(kind) {
   areaKind = kind;
   if (kind && !areaCache[kind]) areaCache[kind] = await getJSON('/api/areas/' + kind);
+  if (kind) await loadIndicator(kind, areaMetric);
   if (areaKind !== kind) return;          // changed again while loading
   map.getSource('areas').setData(kind ? areaCache[kind] : { type: 'FeatureCollection', features: [] });
   map.setLayerZoomRange('areas-labels', kind === 'district' ? 10 : 13, 24);
@@ -774,20 +812,33 @@ async function setAreaKind(kind) {
   paintAreas();
 }
 
+// Sofiaplan's indicators come one at a time from /api/indicators and are
+// merged into the planning units' properties under the metric's key.
+async function loadIndicator(kind, key) {
+  const m = METRICS[key], fc = areaCache[kind];
+  if (!m?.indicator || kind !== 'planning_unit' || fc.loaded?.[key]) return;
+  const q = new URLSearchParams({ breakdown: m.breakdown || '', per: m.per || '' });
+  const values = await getJSON(`/api/indicators/${m.indicator}?${q}`).catch(() => ({}));
+  fc.features.forEach(f => { f.properties[key] = values[f.properties.id] ?? null; });
+  (fc.loaded ||= {})[key] = true;
+}
+
 function paintAreas() {
   const m = METRICS[areaMetric], key = areaMetric;
   const steps = m.colors.flatMap((c, i) => i ? [m.breaks[i - 1], c] : [c]);
+  // An indicator is grey where the source has no value; our own shares
+  // where too few people live for a share to mean much.
   map.setPaintProperty('areas-fill', 'fill-color',
-    ['case', ['<', ['coalesce', ['get', 'population'], 0], MIN_PEOPLE], NO_DATA,
+    ['case', m.indicator ? ['==', ['get', key], null] : ['<', ['coalesce', ['get', 'population'], 0], MIN_PEOPLE], NO_DATA,
              ['step', ['coalesce', ['get', key], 0], ...steps]]);
   const fmt = v => m.pct ? Math.round(v * 100) + '%' : m.plain ? String(v) : Number(v).toLocaleString();
-  const labels = m.colors.map((_, i) =>
+  const labels = m.labels || m.colors.map((_, i) =>
     i === 0 ? '< ' + fmt(m.breaks[0]) : i === m.colors.length - 1 ? '≥ ' + fmt(m.breaks[i - 1])
             : fmt(m.breaks[i - 1]) + '–' + fmt(m.breaks[i]));
   document.getElementById('area-legend-title').textContent = `${{ district: 'Districts', neighbourhood: 'Neighbourhoods', planning_unit: 'Planning units' }[areaKind] || 'Areas'}: ${m.label}`;
   document.getElementById('area-legend').innerHTML = !areaKind ? '' :
     m.colors.map((c, i) => `<span><i class="swatch" style="background:${c}"></i>${labels[i]}</span>`).join('') +
-    `<span><i class="swatch" style="background:${NO_DATA}"></i>&lt; ${MIN_PEOPLE} residents</span>`;
+    `<span><i class="swatch" style="background:${NO_DATA}"></i>${m.indicator ? 'no data' : `&lt; ${MIN_PEOPLE} residents`}</span>`;
   if (listName === 'areas') renderList();
 }
 
@@ -991,6 +1042,9 @@ async function selectArea(kind, id, animate) {
     </table>
     <div class="sub">NSI census of 2011 by address; education and birthplace only where NSI gives them
       (DATA_ISSUES #58).</div>`)(a.census) : '<div class="empty">No census addresses here.</div>'}
+    ${a.indicators ? `<h4>Sofiaplan's indicators</h4>${indicatorTable(a.indicators)}
+      <div class="sub">By planning unit, as published by Sofiaplan; matched to this unit by id, name or shape
+      (DATA_ISSUES #68–74).</div>` : ''}
     ${a.districts ? `<h4>District${a.districts.length > 1 ? 's' : ''}</h4><ul>` + a.districts.map(d => `<li>
         <a href="#" data-area="district:${esc(d.code)}">${esc(d.name)}</a>
         <span class="sub">${pct(d.share)} of the area · ${num(d.population)} residents${d.main ? ' · main' : ''}</span></li>`).join('') + '</ul>' : ''}
@@ -1003,6 +1057,26 @@ async function selectArea(kind, id, animate) {
   document.querySelectorAll('#info a[data-area]').forEach(l => l.onclick = e => {
     e.preventDefault(); const [k, i] = l.dataset.area.split(':'); selectArea(k, i);
   });
+}
+
+// One row per indicator. A long run of years (prices) shows the latest
+// one; a few breakdowns (forecast years, functions) are all listed.
+function indicatorTable(rows) {
+  const fmt = r => r.value_text ? esc(r.value_text)
+    : r.unit === '%' ? num(Math.round(r.value * 10) / 10) + '%'
+    : r.unit === 'share' ? pct(r.value)
+    : r.unit === 'm²' ? num(Math.round(r.value)) + ' m²'
+    : num(Math.round(r.value * 100) / 100) + (r.unit === 'per m²' ? ' per m²' : '');
+  const by = {};
+  rows.forEach(r => (by[r.id] ||= []).push(r));
+  return '<table class="access">' + Object.values(by).map(rs => {
+    const r0 = rs[0], years = rs.every(r => /^\d{4}$/.test(r.breakdown));
+    const shown = years && rs.length > 4 ? rs.slice(-1) : rs;
+    const value = shown.length === 1 && !shown[0].breakdown ? fmt(shown[0])
+      : shown.map(r => `${fmt(r)} <span class="sub">${esc(r.breakdown)}</span>`).join('<br>');
+    return `<tr><td>${esc(r0.label)}${r0.data_as_of ? ` <span class="sub">${esc(r0.data_as_of.slice(0, 4))}</span>` : ''}</td>
+      <td>${value}</td></tr>`;
+  }).join('') + '</table>';
 }
 
 // A cadastral plan outline, with what the 2019 buildings, the census and

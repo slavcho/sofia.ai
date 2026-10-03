@@ -673,6 +673,14 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                                 WHERE n.area_kind = %(kind)s AND n.area_id = a.{a['key']}::text),
                     'buildings', (SELECT row_to_json(b) FROM area_buildings b
                                    WHERE b.area_kind = %(kind)s AND b.area_id = a.{a['key']}::text),
+                    'indicators', (SELECT json_agg(json_build_object(
+                                        'id', i.id, 'label', i.label, 'unit', i.unit, 'theme', i.theme,
+                                        'data_as_of', i.data_as_of, 'breakdown', v.breakdown,
+                                        'value', round(v.value, 4), 'value_text', v.value_text)
+                                        ORDER BY i.theme, i.id, v.breakdown)
+                                     FROM planning_unit_indicators v JOIN indicators i ON i.id = v.indicator
+                                    WHERE %(kind)s = 'planning_unit'
+                                      AND v.planning_unit_id::text = a.{a['key']}::text),
                     'districts', {districts},
                     'issues', (SELECT json_agg(json_build_object('issue', i.issue, 'detail', i.detail))
                                  FROM area_issues i
@@ -684,3 +692,40 @@ def area(kind: str = PathParam(pattern=AREA_KIND), area_id: str = PathParam(patt
                   FROM {a['table']} a
                  WHERE a.{a['key']}::text = %(id)s)::text
     """, {"kind": kind, "id": area_id})
+
+
+# Sofiaplan's analyses by planning unit (indicators.sql).
+@app.get("/api/indicators")
+def indicators():
+    return json_query("""
+        SELECT coalesce(json_agg(json_build_object(
+                   'id', i.id, 'label', i.label, 'unit', i.unit, 'theme', i.theme,
+                   'description', i.description, 'data_as_of', i.data_as_of,
+                   'source', i.source_dataset, 'source_units', i.source_units,
+                   'unmatched', i.unmatched,
+                   'breakdowns', (SELECT json_agg(DISTINCT v.breakdown)
+                                    FROM planning_unit_indicators v WHERE v.indicator = i.id))
+                   ORDER BY i.theme, i.id), '[]')::text
+          FROM indicators i
+    """)
+
+
+# One indicator's values as {planning unit id: value}, for colouring the
+# map. per: divide by another indicator of the same unit (no breakdown),
+# e.g. the forecast for 2030 per resident of 2017.
+@app.get("/api/indicators/{indicator}")
+def indicator_values(indicator: str = PathParam(pattern=r"^[a-z0-9_]+$"),
+                     breakdown: str = "",
+                     per: str = Query("", pattern=r"^[a-z0-9_]*$")):
+    return json_query("""
+        SELECT CASE WHEN EXISTS (SELECT 1 FROM indicators WHERE id = %(id)s)
+               THEN coalesce(json_object_agg(v.planning_unit_id::text,
+                        CASE WHEN %(per)s = '' THEN round(v.value, 4)
+                             ELSE round(v.value / nullif(d.value, 0), 4) END), '{}')::text END
+          FROM planning_unit_indicators v
+          LEFT JOIN planning_unit_indicators d
+                 ON d.planning_unit_id = v.planning_unit_id AND d.indicator = %(per)s
+                AND d.breakdown = ''
+         WHERE v.indicator = %(id)s AND v.breakdown = %(breakdown)s AND v.value IS NOT NULL
+           AND (%(per)s = '' OR d.value > 0)
+    """, {"id": indicator, "breakdown": breakdown, "per": per})
