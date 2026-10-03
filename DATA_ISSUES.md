@@ -5,7 +5,7 @@ per kind of problem. Single rows that show the problem are listed by the
 issue views in the database (`city.metro_issues`, `city.area_issues`,
 `city.park_issues`, `city.education_issues`, `city.catchment_issues`,
 `city.transit_issues`, `city.building_issues`, `city.census_issues`,
-`city.building_extra_issues`); this
+`city.building_extra_issues`, `city.indicator_issues`); this
 file records what we know about each kind: where it comes from, what it
 affects, and what we did about it.
 
@@ -90,6 +90,13 @@ When you add an entry, give it the next number and keep the fields.
 | 65 | Renovation stage codes are not documented | buildings | open |
 | 66 | The shade model's facades and buildings do not link | buildings | open |
 | 67 | The BREEAM layer has no rating | buildings | open |
+| 68 | Indicator files do not carry the planning unit id | indicators | worked around |
+| 69 | The 2019 indicator files use an older division | indicators | flagged |
+| 70 | Most indicator files cover only part of the units | indicators | flagged |
+| 71 | Prices have no currency and some are duplicated | indicators | worked around |
+| 72 | Forecast scenario codes are not documented | indicators | worked around |
+| 73 | Sewer connection above 100 % | indicators | flagged |
+| 74 | Indicator files left out | indicators | open |
 
 ## Metro
 
@@ -887,3 +894,77 @@ interpreted by `db/city/transit.sql`.
 - **Handling:** none yet. Per building, use one source at a time; per
   area both agree to within a few percent (`area_census`).
 
+## Planning-unit indicators
+
+### 68. Indicator files do not carry the planning unit id
+
+- **Status:** worked around.
+- **What:** each of Sofiaplan's per-unit files numbers its units afresh
+  (`object_id`, a UUID `id`); neither is the `object_id` of the unit
+  division (`ge_26_sofpr_20200616`) that `city.planning_units` is built
+  from. Only the price and floor-area files carry `ge_id`, which is.
+- **Handling:** `indicators.sql` matches by `ge_id`; else by the same
+  `regname` if the two shapes overlap by half of the larger; else by a
+  shape overlapping 90 % of the larger. `planning_unit_indicators.match`
+  says which rule was used.
+
+### 69. The 2019 indicator files use an older division
+
+- **Status:** flagged.
+- **What:** the mono- and polyfunctionality file (2019-07-19) has 574
+  units of an older division; 44 of them were redrawn since and match
+  no current unit.
+- **Handling:** they are left out rather than spread over the new
+  units. **Check:** `indicator_issues` ('source units not found among
+  the planning units').
+
+### 70. Most indicator files cover only part of the units
+
+- **Status:** flagged.
+- **What:** prices exist for about 140 of 564 units, education
+  facilities for the 264 units with any, walking access to schools for
+  the 228 units with residents, the residential shading for 299 and the
+  sewer connection for 351. A missing unit is "no data", not zero.
+- **Check:** `indicator_issues` ('indicator covers only part of the
+  planning units').
+
+### 71. Prices have no currency and some are duplicated
+
+- **Status:** worked around.
+- **What:** the purchase and rent prices (2002-2020) do not say their
+  currency or whether the rent is monthly; the values suggest euro per
+  m² and per month. 18 (unit, year) pairs appear twice.
+- **Handling:** the duplicates are averaged; the unit is shown as
+  "per m²" without a currency. Some values are implausible (an office
+  at 2 per m², a shop rent of 0.03) and are kept as given.
+
+### 72. Forecast scenario codes are not documented
+
+- **Status:** worked around.
+- **What:** Kopralev's forecast has columns `po…`, `pp…` and `pr…` for
+  2020-2050 and age groups 0-2, 3-6, 7-14, 15-18 and 65+, with no
+  legend. The decade is cut to three digits (`pr0714_203` = 2030).
+- **Handling:** taken as optimistic, pessimistic and realistic, since
+  pp < pr < po in every year (a test checks it). The age groups are
+  loaded for the realistic scenario only.
+
+### 73. Sewer connection above 100 %
+
+- **Status:** flagged.
+- **What:** `conect_san` is above 100 in three units (up to 105 %);
+  213 units have no value.
+- **Check:** `indicator_issues` ('percentage outside 0-100').
+
+### 74. Indicator files left out
+
+- **Status:** open.
+- **What:** not loaded because they cannot be read reliably:
+  - access to employment by public transport: `join_count` (0-8) and
+    `kgr` (0-1.17) are not explained;
+  - number of schools relative to residential area: `broj_uch_s` is
+    mostly empty and `otnosh` is often twice `rzp_all`;
+  - morphology: an older division of 253 units, whose figures we have
+    by building and address anyway;
+  - Kopralev's forecast on the older division (the adjusted one is
+    loaded).
+- **Handling:** none; ask Sofiaplan for the field descriptions.
