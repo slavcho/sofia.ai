@@ -690,3 +690,55 @@ class CensusTest(unittest.TestCase):
             SELECT (SELECT census_people FROM city.area_census WHERE area_kind = 'city')
                  - (SELECT sum(census_people) FROM city.area_census WHERE area_kind = 'district')
                  - (SELECT coalesce(sum(people), 0) FROM city.census_addresses WHERE district_code IS NULL)"""), 0)
+
+
+class BuildingExtrasTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conn = connect()
+        (n,) = cls.conn.execute("SELECT count(*) FROM city.panel_buildings").fetchone()
+        if not n:
+            cls.conn.close()
+            raise unittest.SkipTest("city.panel_buildings is empty")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def scalar(self, sql):
+        return self.conn.execute(sql).fetchone()[0]
+
+    def test_panel_buildings_match_their_2019_building(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.panel_buildings p
+              JOIN city.buildings_2019 b ON b.id = p.sofiaplan_id
+             WHERE b.cadastre_ref <> p.cadastre_ref
+                OR p.building_id IS DISTINCT FROM b.building_id"""), 0)
+
+    def test_every_register_entry_is_kept(self):
+        self.assertEqual(self.scalar("SELECT count(*) FROM city.renovations"), 288)
+
+    def test_renovation_match_has_a_point_in_its_district(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.renovations r
+              JOIN city.census_addresses a ON a.id = r.census_address_id
+             WHERE (r.match = 'none') <> (r.census_address_id IS NULL)
+                OR a.district_label <> r.district_code
+                OR NOT ST_Equals(a.geom, r.geom)"""), 0)
+
+    def test_renovation_district_read_from_every_address(self):
+        self.assertEqual(self.scalar(
+            "SELECT count(*) FROM city.renovations WHERE district_code IS NULL"), 0)
+
+    def test_breeam_outline_is_near(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.breeam_buildings b
+              JOIN city.buildings c ON c.id = b.building_id
+             WHERE ST_Distance(c.geom::geography, b.geom::geography) > 30"""), 0)
+
+    def test_shading_is_a_share(self):
+        self.assertEqual(self.scalar("""
+            SELECT count(*) FROM city.building_shading
+             WHERE NOT (shaded_min BETWEEN 0 AND 1 AND shaded_max BETWEEN 0 AND 1)
+                OR NOT (shaded_mean BETWEEN shaded_min AND shaded_max)
+                OR units_rated > units"""), 0)

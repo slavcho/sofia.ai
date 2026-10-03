@@ -1222,3 +1222,93 @@ WITH levels AS (
 SELECT c.*, r.people AS residents_2019,
        round(r.people::numeric / nullif(c.census_people, 0), 3) AS residents_2019_vs_census
   FROM c LEFT JOIN r USING (area_kind, area_id);
+
+-- ------------------------------------------------ building attachments
+--
+-- What other datasets say about single buildings, each linked to a
+-- cadastre outline where possible. Filled by building_extras.sql.
+
+-- Large-panel apartment blocks (Sofiaplan, 2019-01-22): the 2019
+-- building and the panel system it was built with.
+CREATE TABLE IF NOT EXISTS panel_buildings (
+    id             integer PRIMARY KEY,       -- id in the source
+    sofiaplan_id   integer REFERENCES buildings_2019(id) ON DELETE SET NULL,
+    building_id    integer REFERENCES buildings(id) ON DELETE SET NULL,
+    panel_system   text,                      -- pan_nomen, e.g. ЕПЖС - БС 69 СФ/УД/
+    cadastre_ref   text NOT NULL,             -- built from ekatte, cadregion, cadimmovab, cadbuildin
+    people         integer,
+    apartments     integer,
+    floors         integer,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+
+-- The register of buildings in the national energy efficiency
+-- programme for multi-family buildings (2020-07-03). It has addresses
+-- only; they are found among the census addresses: 'street' by street
+-- and number, 'block' by housing estate and block number.
+CREATE TABLE IF NOT EXISTS renovations (
+    id                integer PRIMARY KEY,    -- id in the source
+    status            text,                   -- Одобрено / Отхвърлено
+    stage             integer,                -- stage_contract 1-5; not documented
+    address           text NOT NULL,
+    association       text,                   -- name_ss: the owners' association
+    association_reg   text,                   -- reg_nr_ss
+    census_address_id integer REFERENCES census_addresses(id) ON DELETE SET NULL,
+    building_id       integer REFERENCES buildings(id) ON DELETE SET NULL,
+    match             text NOT NULL CHECK (match IN ('street', 'block', 'none')),
+    geom              geometry(Point, 4326),  -- the census address point
+    district_code     text REFERENCES districts(code),  -- from the address text
+    data_as_of        date NOT NULL,
+    source_dataset    text NOT NULL,
+    source_fid        text NOT NULL
+);
+
+-- Buildings certified (or being certified) under BREEAM (2020-10-01).
+CREATE TABLE IF NOT EXISTS breeam_buildings (
+    id             integer PRIMARY KEY,       -- id in the source
+    name           text,                      -- as the project calls itself
+    title          text,                      -- ime: the building
+    stage          text,                      -- Проект / В строеж / В експлоатация
+    details        jsonb NOT NULL,            -- the other, mostly empty, fields as given
+    building_id    integer REFERENCES buildings(id) ON DELETE SET NULL,  -- outline within 30 m
+    distance_m     numeric,                   -- to that outline, 0 if inside
+    geom           geometry(Point, 4326) NOT NULL,
+    district_code  text REFERENCES districts(code),
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL,
+    source_fid     text NOT NULL
+);
+
+-- Shade on the units (apartments, offices) of each building, from
+-- Sofiaplan's sunlight model (2020-07-01): one point per unit and
+-- floor with "shaded", 0-1 as in the source, which does not say over
+-- what period. The model's own building ids do not match ours, so the
+-- unit points are taken by the outline they lie in.
+CREATE TABLE IF NOT EXISTS building_shading (
+    building_id    integer PRIMARY KEY REFERENCES buildings(id) ON DELETE CASCADE,
+    units          integer NOT NULL,          -- unit points in the outline
+    units_rated    integer NOT NULL,          -- of them with a shaded value
+    shaded_mean    numeric,
+    shaded_min     numeric,
+    shaded_max     numeric,
+    data_as_of     date NOT NULL,
+    source_dataset text NOT NULL
+);
+
+CREATE OR REPLACE VIEW building_extra_issues AS
+SELECT 'panel building not among the 2019 buildings' AS issue, p.id::text AS record_id,
+       format('cadastre %s, %s', p.cadastre_ref, p.panel_system) AS detail, NULL::geometry AS geom
+  FROM panel_buildings p WHERE p.sofiaplan_id IS NULL
+UNION ALL
+SELECT 'renovated building not found among the census addresses', r.id::text,
+       format('%s (%s)', r.address, r.status), NULL
+  FROM renovations r WHERE r.match = 'none'
+UNION ALL
+SELECT 'renovated building address found, but no outline', r.id::text, r.address, r.geom
+  FROM renovations r WHERE r.match <> 'none' AND r.building_id IS NULL
+UNION ALL
+SELECT 'BREEAM building far from any outline', b.id::text,
+       format('%s (%s)', b.title, b.stage), b.geom
+  FROM breeam_buildings b WHERE b.building_id IS NULL;
