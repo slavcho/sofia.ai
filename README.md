@@ -11,6 +11,11 @@ PostGIS index over it. The mission and directives are in
     python3 sync.py        # download the portal into data/
     python3 load_db.py     # load data/ into the database
     python3 load_gtfs.py   # the public transport timetable into schema gtfs
+    psql -v ON_ERROR_STOP=1 -d urbandata -f db/live/schema.sql
+
+The live transit feeds are fetched every minute by cron (`crontab -e`):
+
+    * * * * * cd ~/work/ai.sofia && flock -n /tmp/poll_live.lock python3 poll_live.py >> logs/live.log 2>&1
 
 ## Principles for agents
 
@@ -46,8 +51,16 @@ PostGIS index over it. The mission and directives are in
   published (`gtfs.stops`, `gtfs.stop_times`, ...). `gtfs.feed` names the
   file, its source and when it was downloaded. Interpreted in
   `db/city/transit.sql`.
+- **Live transit:** schema `live` (created by `db/live/schema.sql`), filled
+  every minute by `poll_live.py` from the GTFS-realtime feeds, kept as
+  history since 2026-10-04.
+  - `vehicle_positions`: every vehicle report (daily partitions).
+  - `stop_arrivals`: per trip, stop and service day the scheduled time and
+    the first and latest prediction (monthly partitions);
+    `passed_arrivals` adds the delay for the stops already passed.
+  - `fetches`: every fetch, failed ones too; use it to leave out gaps.
 - **Not in the database yet:** rasters (elevation, slope, orthophotos, drone
-  surveys) and the live feeds (parking, vehicle positions, trip updates).
+  surveys), the transit alerts and the park-and-ride occupancy.
 
 ## Querying
 
