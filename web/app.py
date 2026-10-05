@@ -8,7 +8,9 @@ The database connection is the same as load_db.py: $DATABASE_URL, or the
 local default with the password taken from ~/.pgpass.
 """
 
+import json
 import os
+import re
 from pathlib import Path
 
 import psycopg
@@ -53,6 +55,44 @@ def feature_collection(features_sql: str) -> str:
 @app.get("/")
 def index():
     return FileResponse(HERE / "index.html")
+
+
+# The focuses: ready-made views of the map. The built-in ones are kept in
+# focuses.json, read on every request so that an edit shows on reload.
+# Only their shape is checked here; whether their layers, metrics and
+# lists exist is checked by the page (checkFocus in focuses.js), which
+# knows them.
+BUILTIN_FOCUSES = HERE / "focuses.json"
+FOCUS_ID = re.compile(r"^[a-z0-9-]{1,64}$")
+
+
+def focus_problems(f) -> list[str]:
+    """What is wrong with the shape of a focus; empty if nothing."""
+    if not isinstance(f, dict):
+        return ["not an object"]
+    errors = []
+    if not isinstance(f.get("id"), str) or not FOCUS_ID.match(f["id"]):
+        errors.append("needs an id of lowercase letters, digits and dashes")
+    if not isinstance(f.get("title"), str) or not f["title"]:
+        errors.append("needs a title")
+    for key in ("category", "question", "list", "listScope", "drawer", "panel"):
+        if f.get(key) is not None and not isinstance(f[key], str):
+            errors.append(f"{key} is not a string")
+    if not isinstance(f.get("layers"), list) or not all(isinstance(k, str) for k in f["layers"]):
+        errors.append("layers is not a list of strings")
+    areas = f.get("areas")
+    if areas is not None and not (isinstance(areas, dict) and isinstance(areas.get("kind"), str)
+                                  and isinstance(areas.get("metric", ""), str)):
+        errors.append("areas needs a kind and a metric")
+    zoom = f.get("minZoom")
+    if zoom is not None and (isinstance(zoom, bool) or not isinstance(zoom, (int, float))):
+        errors.append("minZoom is not a number")
+    return errors
+
+
+@app.get("/api/focuses")
+def focuses():
+    return json.loads(BUILTIN_FOCUSES.read_text())
 
 
 @app.get("/api/metro/lines")

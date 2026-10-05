@@ -1,0 +1,677 @@
+{
+  "categories": ["Education", "Transport", "Green spaces", "Health", "Population", "Elections", "Buildings", "Housing", "Planning", "Energy", "Environment", "Technical"],
+  "focuses": [
+    {
+      "id": "overview",
+      "category": null,
+      "title": "Overview",
+      "question": "Metro, parks, kindergartens and schools on one map.",
+      "layers": ["stations", "outlines", "entrances", "tracks", "planned-stations", "parks", "park-entrances", "kindergartens", "schools"],
+      "areas": null,
+      "list": "schools",
+      "drawer": "folded"
+    },
+    {
+      "id": "school-catchments",
+      "category": "Education",
+      "title": "School catchments",
+      "question": "Is the school each child is assigned to also the nearest one, and how far is it?",
+      "layers": ["schools"],
+      "areas": {"kind": "neighbourhood", "metric": "assigned_farther_share"},
+      "list": "schools",
+      "drawer": "open",
+      "minZoom": 12
+    },
+    {
+      "id": "school-walk",
+      "category": "Education",
+      "title": "Walking distance to schools",
+      "question": "Where do children aged 0–14 live more than 800 m from any school for grades 1–7?",
+      "layers": ["schools"],
+      "areas": {"kind": "neighbourhood", "metric": "school_share_800"},
+      "list": "areas",
+      "drawer": "open",
+      "minZoom": 12
+    },
+    {
+      "id": "kindergartens",
+      "category": "Education",
+      "title": "Kindergartens",
+      "question": "Where do children live more than 500 m from a kindergarten?",
+      "layers": ["kindergartens"],
+      "areas": {"kind": "neighbourhood", "metric": "kindergarten_share_500"},
+      "list": "kindergartens",
+      "drawer": "open",
+      "minZoom": 12
+    },
+    {
+      "id": "kindergarten-places",
+      "category": "Education",
+      "title": "Kindergarten places",
+      "question": "How many children are registered in municipal kindergartens per child aged 0–14 living in each district?",
+      "layers": ["kindergartens"],
+      "areas": {"kind": "district", "metric": "registered_per_child"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "sofiaplan-schools",
+      "category": "Education",
+      "title": "Schools: Sofiaplan's measure",
+      "question": "How does Sofiaplan's walking distance to schools (2019) compare with our straight-line one?",
+      "layers": ["schools"],
+      "areas": {"kind": "neighbourhood", "metric": "sofiaplan_school_share_800"},
+      "list": "areas",
+      "drawer": "open",
+      "minZoom": 12
+    },
+    {
+      "id": "metro-access",
+      "category": "Transport",
+      "title": "Metro access",
+      "question": "How many residents live within 500 m of a metro station?",
+      "layers": ["stations", "outlines", "entrances", "tracks"],
+      "areas": {"kind": "neighbourhood", "metric": "share_500"},
+      "list": "stations",
+      "drawer": "open"
+    },
+    {
+      "id": "planned-metro",
+      "category": "Transport",
+      "title": "Planned metro",
+      "question": "Which neighbourhoods gain the most from the planned stations?",
+      "layers": ["stations", "outlines", "entrances", "tracks", "planned-stations"],
+      "areas": {"kind": "neighbourhood", "metric": "gain_500"},
+      "list": "stations",
+      "drawer": "open"
+    },
+    {
+      "id": "transit-frequency",
+      "category": "Transport",
+      "title": "Public transport frequency",
+      "question": "How often does a bus, tram, trolleybus or metro leave within 400 m of home at the weekday morning rush?",
+      "layers": ["transit-stops"],
+      "areas": {"kind": "neighbourhood", "metric": "median_peak_per_hour"},
+      "list": "transit-stops",
+      "drawer": "open",
+      "minZoom": 13
+    },
+    {
+      "id": "transit-evenings",
+      "category": "Transport",
+      "title": "Public transport in the evening",
+      "question": "Who still has 12 or more departures an hour within 400 m on weekday evenings (20–23)?",
+      "layers": ["transit-stops"],
+      "areas": {"kind": "neighbourhood", "metric": "evening_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "transit-weekends",
+      "category": "Transport",
+      "title": "Public transport on Sundays",
+      "question": "Who has 12 or more departures an hour within 400 m on a Sunday (10–18)?",
+      "layers": ["transit-stops"],
+      "areas": {"kind": "neighbourhood", "metric": "sunday_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "transit-night",
+      "category": "Transport",
+      "title": "Night service",
+      "question": "Who has public transport within 400 m at least once an hour between 1 and 4 at night?",
+      "layers": ["transit-routes"],
+      "areas": {"kind": "neighbourhood", "metric": "night_share"},
+      "list": "transit-routes",
+      "drawer": "open"
+    },
+    {
+      "id": "transit-live",
+      "category": "Transport",
+      "title": "Public transport now",
+      "question": "Where are the buses, trams and trolleybuses right now, and are they on time?",
+      "layers": ["live-vehicles", "transit-routes", "stations", "tracks"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded"
+    },
+    {
+      "id": "transit-lines",
+      "category": "Transport",
+      "title": "Public transport lines",
+      "question": "Where does each bus, trolleybus, tram and metro line run, and how many trips does it make?",
+      "layers": ["transit-routes", "transit-stops"],
+      "areas": null,
+      "list": "transit-routes",
+      "listScope": "all",
+      "drawer": "open"
+    },
+    {
+      "id": "sofiaplan-transit",
+      "category": "Transport",
+      "title": "Public transport: Sofiaplan's measure",
+      "question": "How does Sofiaplan's walking access to a stop (2021) compare with our straight line to a stop served today?",
+      "layers": ["transit-stops"],
+      "areas": {"kind": "neighbourhood", "metric": "sofiaplan_transit_share_400"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "park-access",
+      "category": "Green spaces",
+      "title": "Park access",
+      "question": "How many residents live within 300 m of a park entrance?",
+      "layers": ["parks", "park-entrances"],
+      "areas": {"kind": "neighbourhood", "metric": "park_share_300"},
+      "list": "parks",
+      "drawer": "open"
+    },
+    {
+      "id": "city-parks",
+      "category": "Green spaces",
+      "title": "City parks",
+      "question": "Who lives within 800 m of one of the large city parks?",
+      "layers": ["parks"],
+      "areas": {"kind": "neighbourhood", "metric": "city_park_share_800"},
+      "list": "parks",
+      "drawer": "open"
+    },
+    {
+      "id": "sofiaplan-parks",
+      "category": "Green spaces",
+      "title": "Parks: Sofiaplan's measure",
+      "question": "Which neighbourhoods have walking access to green space according to Sofiaplan (2021), and does it agree with ours?",
+      "layers": ["parks"],
+      "areas": {"kind": "neighbourhood", "metric": "sofiaplan_park_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "density",
+      "category": "Population",
+      "title": "Population density",
+      "question": "Where do the residents live? Residents per km² of each planning unit (2019).",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "density"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "ageing",
+      "category": "Population",
+      "title": "Older residents",
+      "question": "Where did the most people aged 65 and over live at the 2011 census?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "census_share_65_plus"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "children-2011",
+      "category": "Population",
+      "title": "Children (census)",
+      "question": "Where were children aged 0–14 the largest share of residents in 2011?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "census_share_0_14"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "education-level",
+      "category": "Population",
+      "title": "Higher education",
+      "question": "What share of residents had a university degree at the 2011 census?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "higher_education_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "born-abroad",
+      "category": "Population",
+      "title": "Born abroad",
+      "question": "Where did residents born outside Bulgaria live in 2011?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "born_abroad_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "population-change",
+      "category": "Population",
+      "title": "Change since the census",
+      "question": "Where did the 2019 building data count more or fewer residents than the 2011 census?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "residents_2019_vs_census"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "buildings",
+      "category": "Buildings",
+      "title": "Buildings",
+      "question": "What is each building used for, who lives in it, and is it a panel block or being renovated?",
+      "layers": ["buildings"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded",
+      "minZoom": 15
+    },
+    {
+      "id": "building-age",
+      "category": "Buildings",
+      "title": "Age of the housing",
+      "question": "In which neighbourhoods were the homes built, by the median year of the census addresses?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "median_built_year"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "building-height",
+      "category": "Buildings",
+      "title": "Height of the housing",
+      "question": "How many floors do residential buildings have on average in each planning unit?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "residential_mean_floors"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "school-unserved",
+      "category": "Education",
+      "title": "Schools on foot: Sofiaplan by unit",
+      "question": "What share of residents has no school within walking distance, by planning unit?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "school_unserved_pct"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "kindergarten-unserved",
+      "category": "Education",
+      "title": "Kindergartens on foot: Sofiaplan by unit",
+      "question": "What share of residents has no municipal kindergarten within walking distance?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "kindergarten_unserved_pct"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "planned-green",
+      "category": "Green spaces",
+      "title": "Planned public green space",
+      "question": "How much of the green space the master plan provides for is meant for public use?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "planned_public_green_pct"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "population-forecast",
+      "category": "Population",
+      "title": "Population forecast 2030",
+      "question": "Where will the population grow or shrink by 2030, in Kopralev's realistic forecast?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "population_forecast_2030"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "renovation",
+      "category": "Buildings",
+      "title": "Energy renovation",
+      "question": "Where has residential floor area been renovated for energy efficiency?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "renovated_gfa_m2"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "shading",
+      "category": "Buildings",
+      "title": "Shaded homes",
+      "question": "How much are residential buildings shaded by their neighbours?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "residential_shaded_mean"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "apartment-prices",
+      "category": "Housing",
+      "title": "Apartment prices",
+      "question": "What did apartments cost per m² in 2020, by planning unit?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "apartment_price_m2"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "apartment-rents",
+      "category": "Housing",
+      "title": "Apartment rents",
+      "question": "What was the monthly rent per m² of an apartment in 2020?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "apartment_rent_m2"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "housing-permits",
+      "category": "Housing",
+      "title": "New housing",
+      "question": "Where were permits for new housing issued from 2010 to 2020?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "residential_permits_since_2010"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "growth-room",
+      "category": "Planning",
+      "title": "Room to grow",
+      "question": "How many more residents could the master plan zones house, at 35 m² of floor area each?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "potential_residents"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "development-potential",
+      "category": "Planning",
+      "title": "Development potential",
+      "question": "Where do the 2009 master plan zones allow more building than there is?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "development_potential"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "heritage",
+      "category": "Planning",
+      "title": "Cultural heritage",
+      "question": "Where are the immovable cultural heritage sites?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "heritage_sites"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "sealed-soil",
+      "category": "Environment",
+      "title": "Sealed soil",
+      "question": "How much of the land is covered by buildings, roads and pavement?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "sealed_soil_pct"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "solid-fuel",
+      "category": "Environment",
+      "title": "Heating with wood and coal",
+      "question": "Where did households heat with solid fuel at the 2011 census, a source of winter air pollution?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "solid_fuel_households"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "sewer",
+      "category": "Technical",
+      "title": "Sewer network",
+      "question": "How much of each planning unit is served by the sewer network?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "sewer_connected_pct"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "coal-heating",
+      "category": "Energy",
+      "title": "Heating with coal",
+      "question": "What share of the heat for homes came from coal in 2017, in Sofiaplan's energy model?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "energy_coal_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "district-heating",
+      "category": "Energy",
+      "title": "District heating",
+      "question": "Where does the heat come from the district heating network, and where not?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "energy_district_heating_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "electric-heating",
+      "category": "Energy",
+      "title": "Electric heating",
+      "question": "Where do homes heat with electricity, which strains the grid in winter?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "energy_electric_heating_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "district-heating-2050",
+      "category": "Energy",
+      "title": "District heating in 2050",
+      "question": "How much heat will district heating supply in 2050, in Sofiaplan's realistic scenario?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "energy_district_heating_share_2050"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "heat-pumps-2050",
+      "category": "Energy",
+      "title": "Heat pumps in 2050",
+      "question": "Where will air heat pumps supply the heat in 2050, in the realistic scenario?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "energy_heat_pumps_share_2050"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "dkc-access",
+      "category": "Health",
+      "title": "Polyclinics on foot",
+      "question": "What share of residents has no district polyclinic (DKC) within walking distance?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "dkc_unserved_pct"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "census-tracts",
+      "category": "Population",
+      "title": "Census tracts",
+      "question": "How old are the people in each census tract, the smallest area the NSI publishes?",
+      "layers": ["census-tracts"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded",
+      "minZoom": 13
+    },
+    {
+      "id": "population-grid",
+      "category": "Population",
+      "title": "Population in 1 km cells",
+      "question": "How many people lived in each square kilometre of Sofia and its surroundings in 2011?",
+      "layers": ["population-grid"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded"
+    },
+    {
+      "id": "polling-places",
+      "category": "Elections",
+      "title": "Polling places",
+      "question": "How far do voters walk to their polling place, and which section areas do not match their place?",
+      "layers": ["polling-places"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded",
+      "minZoom": 12
+    },
+    {
+      "id": "master-plan",
+      "category": "Planning",
+      "title": "Master plan zones",
+      "question": "What does the 2009 master plan allow to be built here?",
+      "layers": ["master-plan"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded",
+      "minZoom": 13
+    },
+    {
+      "id": "planned-housing",
+      "category": "Planning",
+      "title": "Land the plan gives to housing",
+      "question": "How much of each area does the master plan set aside for housing, including central and mixed zones?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "plan_residential_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "planned-production",
+      "category": "Planning",
+      "title": "Land the plan gives to production",
+      "question": "Where does the master plan keep land for industry and production?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "plan_production_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "street-lights-led",
+      "category": "Energy",
+      "title": "LED street lights",
+      "question": "Where had the street lights been changed to LED by 2017?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "light_led_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "street-lights-condition",
+      "category": "Technical",
+      "title": "Street lights in poor condition",
+      "question": "Where were the street lights in poor condition or not working in 2017?",
+      "layers": [],
+      "areas": {"kind": "neighbourhood", "metric": "light_poor_share"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "street-lights-density",
+      "category": "Technical",
+      "title": "Street lights per km²",
+      "question": "How densely are the streets lit across the city?",
+      "layers": [],
+      "areas": {"kind": "planning_unit", "metric": "lights_per_km2"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "rectifier-stations",
+      "category": "Transport",
+      "title": "Rectifier stations",
+      "question": "Where are the stations that power the trams and trolleybuses?",
+      "layers": ["rectifier-stations", "transit-routes"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded"
+    },
+    {
+      "id": "playgrounds",
+      "category": "Green spaces",
+      "title": "Playgrounds",
+      "question": "Do the children have a playground within 300 m of home?",
+      "layers": ["playgrounds"],
+      "areas": {"kind": "neighbourhood", "metric": "children_playground_share_300"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "children-per-playground",
+      "category": "Green spaces",
+      "title": "Children per playground",
+      "question": "How many children share each playground?",
+      "layers": ["playgrounds"],
+      "areas": {"kind": "district", "metric": "children_per_playground"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "markets",
+      "category": "Planning",
+      "title": "Markets",
+      "question": "Who lives within 1 km of a municipal market?",
+      "layers": ["markets"],
+      "areas": {"kind": "neighbourhood", "metric": "market_share_1000"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "tent-camps",
+      "category": "Planning",
+      "title": "Tent camp sites",
+      "question": "How much open land is set aside for tent camps, for each resident?",
+      "layers": ["tent-camps"],
+      "areas": {"kind": "district", "metric": "tent_camp_m2_per_resident"},
+      "list": "areas",
+      "drawer": "open"
+    },
+    {
+      "id": "metro-extensions",
+      "category": "Transport",
+      "title": "Metro extensions",
+      "question": "Which land do the new metro lines to Slatina and to Vitosha take?",
+      "layers": ["metro-projects", "stations", "tracks", "planned-stations"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded"
+    },
+    {
+      "id": "concessions",
+      "category": "Environment",
+      "title": "Mining concessions",
+      "question": "Where are sand, gravel and stone mined under concession?",
+      "layers": ["concessions", "settlements"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded"
+    },
+    {
+      "id": "construction-boundaries",
+      "category": "Planning",
+      "title": "Construction boundaries",
+      "question": "Where may Sofia and the villages around it build?",
+      "layers": ["settlements"],
+      "areas": null,
+      "list": "areas",
+      "drawer": "folded"
+    },
+    {
+      "id": "data-issues",
+      "category": "Technical",
+      "title": "Data issues",
+      "question": "Where are the source data missing, wrong, or in disagreement with each other?",
+      "layers": ["stations", "outlines", "entrances", "tracks", "planned-stations", "parks", "park-entrances", "kindergartens", "schools"],
+      "areas": null,
+      "panel": "issues",
+      "list": "issues",
+      "listScope": "all",
+      "drawer": "open"
+    }
+  ]
+}
