@@ -9,6 +9,7 @@ local default with the password taken from ~/.pgpass.
 """
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -21,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 DSN = os.environ.get("DATABASE_URL", "host=127.0.0.1 dbname=urbandata user=urbanuser")
 HERE = Path(__file__).resolve().parent
+log = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="sofia.ai")
 # The GeoJSON compresses about tenfold (the public transport stops are 1.5 MB).
@@ -90,9 +92,42 @@ def focus_problems(f) -> list[str]:
     return errors
 
 
+def stored_focuses(conn) -> list[tuple[str, dict]]:
+    """The focuses in app.focuses shown to everyone, as (id, definition)."""
+    return conn.execute("""
+        SELECT id, definition FROM app.focuses
+         WHERE owner IS NULL
+         ORDER BY created_at, id
+    """).fetchall()
+
+
+def merge_focuses(builtin: list[dict], stored: list[tuple[str, dict]]) -> list[dict]:
+    """The built-in focuses, then the stored ones that neither take a
+    built-in id nor are badly shaped; those are logged and left out."""
+    taken = {f["id"] for f in builtin}
+    merged = list(builtin)
+    for id, definition in stored:
+        f = {**definition, "id": id}
+        problems = ["takes the id of a built-in focus"] if id in taken else focus_problems(f)
+        if problems:
+            log.warning("focus %s left out: %s", id, "; ".join(problems))
+            continue
+        merged.append(f)
+    return merged
+
+
+# Without the database, or without the app schema, the built-in focuses
+# are still served, so the page always has its menu.
 @app.get("/api/focuses")
 def focuses():
-    return json.loads(BUILTIN_FOCUSES.read_text())
+    doc = json.loads(BUILTIN_FOCUSES.read_text())
+    try:
+        with psycopg.connect(DSN) as conn:
+            stored = stored_focuses(conn)
+    except (psycopg.OperationalError, psycopg.errors.UndefinedTable) as e:
+        log.warning("only the built-in focuses: %s", e)
+        stored = []
+    return {**doc, "focuses": merge_focuses(doc["focuses"], stored)}
 
 
 @app.get("/api/metro/lines")
