@@ -77,7 +77,9 @@ class LiveSchemaTest(unittest.TestCase):
     def test_only_passed_stops_have_a_delay(self):
         self.scalar("SELECT live.ensure_partitions('2099-03-15')")
         self.conn.execute("""
-            INSERT INTO live.fetches (feed, fetched_at) VALUES ('trip-updates', '2099-03-15 12:10+00');
+            INSERT INTO live.fetches (feed, fetched_at)
+            VALUES ('trip-updates', '2099-03-15 12:01+00'), ('trip-updates', '2099-03-15 12:02+00'),
+                   ('trip-updates', '2099-03-15 12:10+00');
             INSERT INTO live.stop_arrivals (service_date, trip_id, stop_id, scheduled,
                                             first_predicted, first_seen, last_predicted, last_seen)
             VALUES ('2099-03-15', 'X', 'passed', '2099-03-15 12:00+00',
@@ -87,6 +89,27 @@ class LiveSchemaTest(unittest.TestCase):
         rows = self.conn.execute("""SELECT stop_id, delay_s FROM live.passed_arrivals
                                      WHERE trip_id = 'X'""").fetchall()
         self.assertEqual(rows, [('passed', 120)])
+
+    def test_stops_lost_in_a_gap_or_dropped_early_have_no_delay(self):
+        # Fetches every minute from 12:00 to 12:05, then nothing until 12:30
+        # (the machine slept), then 12:30 and 12:31.
+        self.conn.execute("""
+            INSERT INTO live.fetches (feed, fetched_at)
+            SELECT 'trip-updates', t FROM generate_series(timestamptz '2099-03-15 12:00+00',
+                                                          '2099-03-15 12:05+00', '1 minute') t
+            UNION ALL VALUES ('trip-updates', timestamptz '2099-03-15 12:30+00'), ('trip-updates', '2099-03-15 12:31+00')""")
+        self.scalar("SELECT live.ensure_partitions('2099-03-15')")
+        # last_seen, last_predicted; scheduled 12:00 for all.
+        self.conn.execute("""
+            INSERT INTO live.stop_arrivals (service_date, trip_id, stop_id, scheduled,
+                                            first_predicted, first_seen, last_predicted, last_seen)
+            SELECT '2099-03-15', 'X', s, '2099-03-15 12:00+00', p, '2099-03-15 11:00+00', p, seen
+              FROM (VALUES ('passed',  timestamptz '2099-03-15 12:02+00', timestamptz '2099-03-15 12:02:30+00'),
+                           ('in gap',  '2099-03-15 12:05+00', '2099-03-15 12:10+00'),
+                           ('dropped', '2099-03-15 12:02+00', '2099-03-15 12:20+00')) v(s, seen, p)""")
+        rows = self.conn.execute("""SELECT stop_id, delay_s FROM live.passed_arrivals
+                                     WHERE trip_id = 'X'""").fetchall()
+        self.assertEqual(rows, [('passed', 150)])
 
 
 SOFIA = ZoneInfo("Europe/Sofia")

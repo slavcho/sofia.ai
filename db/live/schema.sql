@@ -78,15 +78,22 @@ CREATE TABLE IF NOT EXISTS stop_arrivals (
 CREATE INDEX IF NOT EXISTS stop_arrivals_stop_idx ON stop_arrivals (stop_id, service_date);
 CREATE INDEX IF NOT EXISTS stop_arrivals_route_idx ON stop_arrivals (route_id, service_date);
 
--- Delay in seconds: positive is late. Only for stops already passed
--- (not seen in the latest trip-updates fetch), where last_predicted
--- stands for the arrival.
+-- Delay in seconds: positive is late. Only for stops seen to be passed,
+-- where last_predicted stands for the arrival: the next successful fetch
+-- came within 2 minutes of the last sighting (not after a gap, when the
+-- machine slept or the feed was down) and no longer had the stop, while
+-- the prediction was due by then (give or take a minute). A stop that
+-- drops out with its time still ahead (trip ended early, vehicle lost)
+-- was not seen to be passed.
 CREATE OR REPLACE VIEW passed_arrivals AS
 SELECT a.*, extract(epoch FROM a.last_predicted - a.scheduled)::integer AS delay_s
   FROM stop_arrivals a
+  CROSS JOIN LATERAL (SELECT f.fetched_at FROM fetches f
+                       WHERE f.feed = 'trip-updates' AND f.error IS NULL AND f.fetched_at > a.last_seen
+                       ORDER BY f.fetched_at LIMIT 1) n
  WHERE a.scheduled IS NOT NULL
-   AND a.last_seen < (SELECT max(fetched_at) FROM fetches
-                       WHERE feed = 'trip-updates' AND error IS NULL);
+   AND n.fetched_at <= a.last_seen + interval '2 minutes'
+   AND a.last_predicted <= n.fetched_at + interval '1 minute';
 
 -- Makes the partitions that hold `day`: that day's for the positions
 -- (UTC days, as the timestamps are stored) and that month's for the
