@@ -9,7 +9,7 @@ const FOCUS_CATEGORIES = ['Education', 'Transport', 'Green spaces', 'Health', 'P
 // Keys of the layer toggles in the sidebar (data-key).
 const FOCUS_LAYERS = ['stations', 'outlines', 'entrances', 'tracks', 'planned-stations',
                       'parks', 'park-entrances', 'planned-parks', 'kindergartens', 'schools',
-                      'transit-stops', 'transit-routes', 'buildings',
+                      'transit-stops', 'transit-routes', 'live-vehicles', 'buildings',
                       'census-tracts', 'population-grid', 'polling-places', 'rectifier-stations', 'master-plan',
                       'playgrounds', 'markets', 'tent-camps', 'metro-projects', 'concessions', 'settlements'];
 const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
@@ -18,7 +18,7 @@ const FOCUS_AREA_KINDS = ['district', 'neighbourhood', 'planning_unit'];
 // So does public transport: 3,500 stops and 140 lines would bury the rest,
 // and so do the 265,000 buildings. The census tracts, the grid and the
 // polling places cover the whole map, so they come with their own focus.
-const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'buildings',
+const ALL_LAYERS = FOCUS_LAYERS.filter(k => !['planned-parks', 'transit-stops', 'transit-routes', 'live-vehicles', 'buildings',
                                               'census-tracts', 'population-grid', 'polling-places',
                                               'rectifier-stations', 'master-plan', 'playgrounds', 'markets',
                                               'tent-camps', 'metro-projects', 'concessions', 'settlements'].includes(k));
@@ -71,6 +71,9 @@ const FOCUSES = [
     question: 'Who has public transport within 400 m at least once an hour between 1 and 4 at night?',
     layers: ['transit-routes'], areas: { kind: 'neighbourhood', metric: 'night_share' },
     list: 'transit-routes', drawer: 'open' },
+  { id: 'transit-live', category: 'Transport', title: 'Public transport now',
+    question: 'Where are the buses, trams and trolleybuses right now, and are they on time?',
+    layers: ['live-vehicles', 'transit-routes', 'stations', 'tracks'], areas: null, list: 'areas', drawer: 'folded' },
   { id: 'transit-lines', category: 'Transport', title: 'Public transport lines',
     question: 'Where does each bus, trolleybus, tram and metro line run, and how many trips does it make?',
     layers: ['transit-routes', 'transit-stops'], areas: null, list: 'transit-routes', listScope: 'all', drawer: 'open' },

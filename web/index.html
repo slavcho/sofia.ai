@@ -174,6 +174,7 @@
   <label class="toggle"><input type="checkbox" data-key="schools" data-layers="schools" checked> Schools</label>
   <label class="toggle"><input type="checkbox" data-key="transit-stops" data-layers="transit-stops"> Public transport stops</label>
   <label class="toggle"><input type="checkbox" data-key="transit-routes" data-layers="transit-routes"> Public transport lines</label>
+  <label class="toggle"><input type="checkbox" data-key="live-vehicles" data-layers="live-vehicles,live-vehicle-labels"> Vehicles now (live)</label>
   <label class="toggle"><input type="checkbox" data-key="buildings" data-layers="buildings-fill,buildings-line"> Buildings</label>
   <label class="toggle"><input type="checkbox" data-key="census-tracts" data-layers="census-tracts-fill,census-tracts-line"> Census tracts</label>
   <label class="toggle"><input type="checkbox" data-key="population-grid" data-layers="population-grid-fill,population-grid-line"> Population grid 1 km (2011)</label>
@@ -249,6 +250,12 @@
   <div id="transit-route-legend" class="legend"></div>
   </div>
 
+  <div data-legend="live-vehicles" hidden>
+  <h2>Vehicles now: delay at the next stop</h2>
+  <div id="live-legend" class="legend"></div>
+  <div id="live-age" class="sub"></div>
+  </div>
+
   <div data-legend="master-plan-fill" hidden>
   <h2>Master plan 2009: zones</h2>
   <div id="master-plan-legend" class="legend"></div>
@@ -305,6 +312,9 @@ const STOP_COLORS = ['#c6dbef', '#6baed6', '#3182bd', '#08519c', '#08306b'];
 const STOP_BREAKS = [4, 12, 30, 60];
 // The colours the timetable gives the lines (routes.txt).
 const MODE_COLORS = { bus: '#BE1E2D', trolleybus: '#27AAE1', tram: '#F7941D', metro: '#1C75BC', night: '#000000' };
+const DELAY_BREAKS = [-60, 181, 301];   // seconds: early | on time | 3–5 min late | later
+const DELAY_COLORS = ['#2c7bb6', '#1a9850', '#fdae61', '#d73027'];
+const DELAY_LABELS = ['> 1 min early', 'on time', '3–5 min late', '> 5 min late'];
 const MODE_LABEL = { bus: 'bus', trolleybus: 'trolleybus', tram: 'tram', metro: 'metro' };
 // Buildings by our grouping of the cadastre's functions (buildings.sql).
 const BUILDING_COLORS = { residential: '#d9a66c', ancillary: '#d4d0c8', industry: '#8c96a6',
@@ -508,6 +518,7 @@ map.on('load', async () => {
   map.addSource('kindergartens', { type: 'geojson', data: kg });
   map.addSource('schools', { type: 'geojson', data: sc });
   map.addSource('transit-stops', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addSource('live-vehicles', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('transit-routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   for (const key of [...Object.keys(SMALL), 'polling-area'])
     map.addSource(key, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -633,6 +644,19 @@ map.on('load', async () => {
              'circle-color': ['case', ['!', ['get', 'served']], NO_DATA,
                               ['step', ['get', 'peak_per_hour'], ...STOP_COLORS.flatMap((c, i) => i ? [STOP_BREAKS[i - 1], c] : [c])]],
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  // The fill is the mode, the ring the delay; the line number from zoom 14.
+  map.addLayer({ id: 'live-vehicles', type: 'circle', source: 'live-vehicles', layout: { visibility: 'none' },
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 14, 6, 17, 9],
+             'circle-color': ['case', ['get', 'night'], MODE_COLORS.night,
+                              ['match', ['get', 'mode'], ...Object.entries(MODE_COLORS).flat(), NO_DATA]],
+             'circle-stroke-color': ['case', ['==', ['get', 'delay_s'], null], '#ffffff',
+                                     ['step', ['get', 'delay_s'], ...DELAY_COLORS.flatMap((c, i) => i ? [DELAY_BREAKS[i - 1], c] : [c])]],
+             'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 10, 1, 14, 2.5] } });
+  map.addLayer({ id: 'live-vehicle-labels', type: 'symbol', source: 'live-vehicles', minzoom: 14,
+    layout: { visibility: 'none', 'text-field': ['coalesce', ['get', 'line'], ''], 'text-size': 11,
+              'text-font': ['Noto Sans Regular'], 'text-offset': [0, 1.2], 'text-anchor': 'top',
+              'text-optional': true },
+    paint: { 'text-color': '#1d1f23', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
   map.addLayer({ id: 'polling-area', type: 'line', source: 'polling-area',
     paint: { 'line-color': '#d6007a', 'line-width': 2.5, 'line-dasharray': [2, 1] } });
   map.addLayer({ id: 'polling-places', type: 'circle', source: 'polling-places', minzoom: 11,
@@ -698,6 +722,7 @@ map.on('load', async () => {
     `<span><i class="swatch" style="background:${c}"></i>${k}</span>`).join('') +
     `<span><i class="swatch" style="border:2px dashed #555"></i>long-term zone</span>`;
   renderSmallAreaLegends();
+  renderLiveLegend();
   const tag = (list, source) => list.map(i => ({ ...i, source }));
   renderIssues([...tag(issues, 'Metro'), ...tag(areaIssues, 'Areas'), ...tag(parkIssues, 'Parks'),
                 ...tag(eduIssues, 'Kindergartens and schools'), ...tag(catchmentIssues, 'School catchments'),
@@ -743,13 +768,18 @@ map.on('load', async () => {
     if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', 'schools'] }).length) return;
     selectKindergarten(e.features[0].properties.id);
   });
-  const TRANSIT_LAYERS = ['transit-stops', 'transit-routes'];
+  const TRANSIT_LAYERS = ['live-vehicles', 'transit-stops', 'transit-routes'];
+  // A vehicle is drawn above the stops and lines, and moves: it goes first.
+  map.on('click', 'live-vehicles', e => {
+    if (map.queryRenderedFeatures(e.point, { layers: METRO }).length) return;
+    selectVehicle(e.features[0].properties.id);
+  });
   map.on('click', 'transit-stops', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'live-vehicles'] }).length) return;
     selectTransitStop(e.features[0].properties.id);
   });
   map.on('click', 'transit-routes', e => {
-    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'transit-stops'] }).length) return;
+    if (map.queryRenderedFeatures(e.point, { layers: [...METRO, 'park-entrances', ...EDU, 'live-vehicles', 'transit-stops'] }).length) return;
     selectTransitRoute(e.features[0].properties.id);
   });
   map.on('click', 'parks-fill', e => {
@@ -821,7 +851,7 @@ map.on('load', async () => {
   // ?transit_route=<id>, ?building=<id>, ?polling_section=<id>,
   // ?census_tract=<id>, ?grid_cell=<id>, ?rectifier_station=<id>,
   // ?master_plan_zone=<id>, ?playground=<id>, ?market=<id>,
-  // ?tent_camp=<id>, ?metro_project=<id>, ?concession=<id>
+  // ?tent_camp=<id>, ?metro_project=<id>, ?concession=<id>, ?vehicle=<id>
   // or ?area=<kind>:<id> opens the page
   // on that object, so it can be shared.
   const q = new URLSearchParams(location.search);
@@ -835,6 +865,7 @@ map.on('load', async () => {
   else if (q.has('kindergarten')) selectKindergarten(+q.get('kindergarten'), false);
   else if (q.has('school')) selectSchool(+q.get('school'), false);
   else if (q.has('transit_stop')) selectTransitStop(q.get('transit_stop'), false);
+  else if (q.has('vehicle')) selectVehicle(q.get('vehicle'), false);
   else if (q.has('transit_route')) selectTransitRoute(q.get('transit_route'), false);
   else if (q.has('building')) selectBuilding(+q.get('building'), false);
   else if (q.has('polling_section')) selectPollingSection(q.get('polling_section'), false);
@@ -1337,6 +1368,7 @@ function bindToggles() {
       map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none'));
     if (cb.checked && cb.dataset.key.startsWith('transit')) loadTransit().catch(() => {});
     if (cb.checked && SMALL[cb.dataset.key]) loadSmall(cb.dataset.key).catch(() => {});
+    if (cb.dataset.key === 'live-vehicles') setLive(cb.checked);
   });
   document.getElementById('show-planned').onchange = e => {
     const f = e.target.checked ? null : ['==', ['get', 'status'], 'existing'];
@@ -1842,6 +1874,85 @@ function selectSchool(id, animate) {
 
 // A stop's lines and how many departures leave it in each clock hour of
 // the reference days; the stop itself comes from the list of stops.
+// Live vehicles (poll_live.py, every minute), fetched again every 30 s
+// while the layer is on and the tab is visible.
+let liveVehicles = null, liveTimer = null;
+
+function setLive(on) {
+  clearInterval(liveTimer);
+  liveTimer = on ? setInterval(() => { if (!document.hidden) loadLive().catch(() => {}); }, 30000) : null;
+  if (on) return loadLive().catch(() => {});
+}
+
+async function loadLive() {
+  const fc = await fetch('/api/live/vehicles', { cache: 'no-store' }).then(r => r.json());
+  liveVehicles = fc;
+  map.getSource('live-vehicles').setData(fc);
+  const age = fc.fetched_at ? Math.round((Date.now() - Date.parse(fc.fetched_at)) / 1000) : null;
+  document.getElementById('live-age').textContent = age == null ? 'No live data.'
+    : `${num(fc.features.length)} vehicles · fetched ${clock(fc.fetched_at)}`
+      + (age > 180 ? ` — ${Math.round(age / 60)} min ago, the feed is not being polled` : '');
+  // A selected vehicle moves with its card.
+  if (selection?.kind === 'vehicle') renderVehicle(selection.id);
+  return fc;
+}
+
+const clock = t => new Date(t).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Sofia' });
+
+function delayText(s) {
+  if (s == null) return '—';
+  const m = Math.round(Math.abs(s) / 60);
+  return s < -60 ? `${m} min early` : s <= 180 ? `on time <span class="sub">(${s >= 0 ? '+' : '−'}${num(Math.abs(s))} s)</span>`
+    : `${m} min late`;
+}
+
+function renderLiveLegend() {
+  document.getElementById('live-legend').innerHTML =
+    ['bus', 'trolleybus', 'tram'].map(k =>
+      `<span><i class="dot" style="background:${MODE_COLORS[k]}"></i>${k}</span>`).join('') +
+    `<span><i class="dot" style="background:${MODE_COLORS.night}"></i>night bus</span><br>` +
+    DELAY_COLORS.map((c, i) => `<span><i class="dot" style="background:#fff;border:2px solid ${c}"></i>${DELAY_LABELS[i]}</span>`).join('') +
+    `<span><i class="dot" style="background:#fff;border:2px solid #ccc"></i>no prediction</span>`;
+}
+
+async function selectVehicle(id, animate) {
+  const cb = document.querySelector('input[data-key="live-vehicles"]');
+  if (!cb.checked) { cb.click(); await loadLive().catch(() => {}); }
+  else if (!liveVehicles) await loadLive().catch(() => {});
+  select('vehicle', id);
+  const f = renderVehicle(id);
+  if (f) moveTo(f.geometry.coordinates, Math.max(map.getZoom(), 15), animate);
+}
+
+function renderVehicle(id) {
+  const f = liveVehicles?.features.find(f => f.properties.id === id);
+  if (!f) {
+    highlight([]);
+    document.getElementById('info').innerHTML = `<h3>Vehicle ${esc(id)}</h3>
+      <div class="empty">Not in service now, or not reporting.</div>`;
+    return null;
+  }
+  const p = f.properties;
+  highlight([f.geometry.coordinates]);
+  const ago = Math.max(0, Math.round((Date.now() - Date.parse(p.recorded_at)) / 1000));
+  document.getElementById('info').innerHTML = `
+    <h3><span class="chip" style="background:${p.night ? MODE_COLORS.night : esc(p.color)}">${esc(p.line ?? p.route_id)}</span>
+      ${esc(MODE_LABEL[p.mode] || 'vehicle')}${p.night ? ' (night)' : ''}</h3>
+    <div>${esc(p.long_name || '')}</div>
+    <dl>
+      <dt>Next stop</dt><dd>${esc(p.stop || p.stop_id || '—')}${p.scheduled
+        ? ` <span class="sub">due ${clock(p.scheduled)}, expected ${clock(p.predicted)}</span>` : ''}</dd>
+      <dt>Delay</dt><dd>${delayText(p.delay_s)}</dd>
+      <dt>Occupancy</dt><dd>${esc(p.occupancy || '—')}</dd>
+      <dt>Traffic</dt><dd>${esc(p.congestion || '—')}</dd>
+      <dt>Speed</dt><dd>${p.speed == null ? '—' : num(p.speed) + ' <span class="sub">(as given; km/h by the look of it)</span>'}</dd>
+      <dt>Vehicle</dt><dd>${esc(p.id)} <span class="sub">trip ${esc(p.trip_id || '—')}</span></dd>
+      <dt>Reported</dt><dd>${clock(p.recorded_at)} <span class="sub">(${ago < 120 ? ago + ' s' : Math.round(ago / 60) + ' min'} ago)</span></dd>
+      <dt>Source</dt><dd>gtfs-vehicle-positions, gtfs-trip-updates (live)</dd>
+    </dl>`;
+  return f;
+}
+
 async function selectTransitStop(id, animate) {
   id = String(id);
   select('transit_stop', id);

@@ -385,6 +385,50 @@ def transit_routes():
     """))
 
 
+@app.get("/api/live/vehicles")
+def live_vehicles():
+    # The vehicles of the latest successful fetch (poll_live.py), each with
+    # its latest report of the 3 minutes before it: one that has not
+    # reported for longer has left service or lost its signal. The delay
+    # is the latest prediction for the stop it is heading to, less the
+    # timetable.
+    body = json_query("""
+        WITH f AS (SELECT max(fetched_at) AS at FROM live.fetches
+                    WHERE feed = 'vehicle-positions' AND error IS NULL),
+        v AS (SELECT DISTINCT ON (p.vehicle_id) p.*
+                FROM live.vehicle_positions p, f
+               WHERE p.recorded_at > f.at - interval '3 minutes' AND p.recorded_at <= f.at + interval '1 minute'
+               ORDER BY p.vehicle_id, p.recorded_at DESC)
+        SELECT json_build_object(
+                   'type', 'FeatureCollection',
+                   'fetched_at', (SELECT at FROM f),
+                   'features', coalesce(json_agg(json_build_object(
+                       'type', 'Feature',
+                       'geometry', json_build_object('type', 'Point',
+                                                     'coordinates', json_build_array(round(v.lon::numeric, 6), round(v.lat::numeric, 6))),
+                       'properties', json_build_object(
+                           'id', v.vehicle_id, 'route_id', v.route_id, 'trip_id', v.trip_id,
+                           'line', r.name, 'long_name', r.long_name, 'mode', r.mode, 'night', r.night,
+                           'color', '#' || coalesce(r.color, '9aa0a8'),
+                           'stop_id', v.stop_id, 'stop', s.stop_name, 'status', v.status,
+                           'speed', v.speed, 'occupancy', v.occupancy, 'congestion', v.congestion,
+                           'recorded_at', v.recorded_at,
+                           'delay_s', extract(epoch FROM a.last_predicted - a.scheduled)::integer,
+                           'scheduled', a.scheduled, 'predicted', a.last_predicted)
+                   ) ORDER BY r.mode, v.vehicle_id), '[]'))::text
+          FROM v
+          LEFT JOIN transit_routes r ON r.id = v.route_id
+          LEFT JOIN gtfs.stops s ON s.stop_id = v.stop_id
+          LEFT JOIN LATERAL (SELECT x.last_predicted, x.scheduled FROM live.stop_arrivals x
+                              WHERE x.trip_id = v.trip_id AND x.stop_id = v.stop_id
+                                AND x.service_date >= (v.recorded_at AT TIME ZONE 'Europe/Sofia')::date - 1
+                              ORDER BY x.last_seen DESC LIMIT 1) a ON true
+    """)
+    # Changes every minute; the browser must not keep it.
+    body.headers["Cache-Control"] = "no-store"
+    return body
+
+
 @app.get("/api/transit/stops/{stop_id}")
 def transit_stop(stop_id: str = PathParam(pattern=r"^[A-Za-z0-9_-]{1,32}$")):
     # The lines calling here and the departures in each clock hour of the
