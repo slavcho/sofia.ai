@@ -496,13 +496,14 @@ const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
 const num = v => v == null ? '—' : Number(v).toLocaleString();
 
 map.on('load', async () => {
-  const [lineList, st, outlines, en, tracks, issues, areaIssues, pk, pe, parkIssues, kg, sc, eduIssues, catchmentIssues, transitIssues] = await Promise.all([
+  const [lineList, st, outlines, en, tracks, issues, areaIssues, pk, pe, parkIssues, kg, sc, eduIssues, catchmentIssues, transitIssues, focusDoc] = await Promise.all([
     getJSON('/api/metro/lines'), getJSON('/api/metro/stations'),
     getJSON('/api/metro/stations?shape=outline'), getJSON('/api/metro/entrances'),
     getJSON('/api/metro/tracks'), getJSON('/api/metro/issues'), getJSON('/api/areas/issues'),
     getJSON('/api/parks'), getJSON('/api/parks/entrances'), getJSON('/api/parks/issues'),
     getJSON('/api/kindergartens'), getJSON('/api/schools'), getJSON('/api/education/issues'),
-    getJSON('/api/schools/catchment-issues'), getJSON('/api/transit/issues')]);
+    getJSON('/api/schools/catchment-issues'), getJSON('/api/transit/issues'), getJSON('/api/focuses')]);
+  ({ focuses: FOCUSES, categories: FOCUS_CATEGORIES } = focusDoc);
   lineList.forEach(l => lines[l.code] = l);
   stations = st; entrances = en; parks = pk; gates = pe; kgs = kg; schools = sc;
 
