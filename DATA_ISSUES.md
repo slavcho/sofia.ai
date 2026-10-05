@@ -105,6 +105,30 @@ When you add an entry, give it the next number and keep the fields.
 | 79 | Polling places come as UTM coordinates with loose addresses | elections | worked around |
 | 80 | Polling places and section areas are of different dates | elections | flagged |
 | 81 | Some polling places lie far from their section | elections | flagged |
+| 82 | The energy scenarios' fields and units are not explained | energy | worked around |
+| 83 | The energy scenarios use the older division of 574 units | energy | flagged |
+| 84 | Heat demand is not always heating plus hot water | energy | flagged |
+| 85 | District heating supplies more than the heat demand | energy | flagged |
+| 86 | The lighting survey numbers the districts alphabetically | lighting | handled |
+| 87 | 5,192 street lights have no district | lighting | flagged |
+| 88 | Lamp types with two more fields run into them | lighting | handled |
+| 89 | Light pole heights of 0 and up to 322 m | lighting | handled |
+| 90 | Not loaded: the cables, manholes, panel power and the field survey | lighting | not loaded |
+| 91 | Streets are not zoned | planning | noted |
+| 92 | The long-term zone names do not match their codes | planning | noted |
+| 93 | What the * after a zone code means is not stated | planning | noted |
+| 94 | 12 playgrounds are marked hidden | playgrounds | handled |
+| 95 | Playground areas such as "200/ 150" | playgrounds | handled |
+| 96 | The playground and market files have no date | playgrounds | noted |
+| 97 | District names in the playground and market files | playgrounds | handled |
+| 98 | The markets name their contact people | playgrounds | not loaded |
+| 99 | One settlement boundary has no geometry, and none has a name | land | handled |
+| 100 | Settlement boundaries overlap Sofia's | land | noted |
+| 101 | The purpose of the tent camp sites is not stated | land | noted |
+| 102 | The concessions are undated and the two files differ | land | noted |
+| 103 | School numbers that do not match the school's name | education | handled |
+| 104 | The school property list has names only | education | handled |
+| 105 | Congestion and occupancy in the live feed are not explained | transit | flagged |
 
 ## Metro
 
@@ -710,6 +734,20 @@ interpreted by `db/city/transit.sql`.
   says where the vehicles were at one moment, not how punctual they are.
 - **Handling:** not loaded. Punctuality needs the feeds polled over
   weeks.
+
+### 105. Congestion and occupancy in the live feed are not explained
+
+- **Status:** flagged.
+- **What:** every vehicle position carries a `congestion_level` and an
+  `occupancy_status`, but the feed does not say how either is worked
+  out. They often disagree with the speed: a bus at 26 km/h is given as
+  "severe congestion" and "empty". Of the first 258k positions, 12.5 %
+  have an unknown congestion level and 3 % no occupancy data. The speed
+  is in km/h, though the GTFS-realtime spec asks for m/s (confirmed; the
+  median is 17 and the top 85).
+- **Handling:** stored as given in `live.vehicle_positions`; the speed
+  is shown as km/h. Use congestion and occupancy for patterns over lines
+  and hours rather than for one vehicle at one moment.
 
 ## Buildings
 

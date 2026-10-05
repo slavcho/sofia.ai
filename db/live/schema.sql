@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS vehicle_positions (
     status      text,                         -- incoming / stopped / in transit
     lon         double precision NOT NULL,
     lat         double precision NOT NULL,
-    speed       real,                         -- as given; km/h by the look of it
+    speed       real,                         -- km/h (the GTFS-rt spec says m/s; this feed uses km/h)
     occupancy   text,                         -- e.g. many seats available
     congestion  text,                         -- e.g. running smoothly
     PRIMARY KEY (vehicle_id, recorded_at)

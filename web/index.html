@@ -1945,7 +1945,7 @@ function renderVehicle(id) {
       <dt>Delay</dt><dd>${delayText(p.delay_s)}</dd>
       <dt>Occupancy</dt><dd>${esc(p.occupancy || '—')}</dd>
       <dt>Traffic</dt><dd>${esc(p.congestion || '—')}</dd>
-      <dt>Speed</dt><dd>${p.speed == null ? '—' : num(p.speed) + ' <span class="sub">(as given; km/h by the look of it)</span>'}</dd>
+      <dt>Speed</dt><dd>${p.speed == null ? '—' : num(p.speed) + ' km/h'}</dd>
       <dt>Vehicle</dt><dd>${esc(p.id)} <span class="sub">trip ${esc(p.trip_id || '—')}</span></dd>
       <dt>Reported</dt><dd>${clock(p.recorded_at)} <span class="sub">(${ago < 120 ? ago + ' s' : Math.round(ago / 60) + ' min'} ago)</span></dd>
       <dt>Source</dt><dd>gtfs-vehicle-positions, gtfs-trip-updates (live)</dd>
