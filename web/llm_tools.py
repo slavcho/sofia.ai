@@ -80,6 +80,28 @@ def summarise_geometries(conn, values: list) -> list:
     return [r[0] for r in rows]
 
 
+def read_only(conn):
+    """Start the transaction every query of the model runs in."""
+    conn.execute("SET TRANSACTION READ ONLY")
+    conn.execute(f"SET LOCAL statement_timeout = '{TIMEOUT}'")
+
+
+def query_error(e: psycopg.Error) -> dict:
+    """A failed query as an error the model can act on."""
+    if isinstance(e, psycopg.errors.QueryCanceled):
+        return {"error": f"the query ran longer than {TIMEOUT} and was stopped. Filter with the "
+                         "spatial indexes (geom && ST_Expand(...), ORDER BY geom <-> point) or "
+                         "aggregate before joining."}
+    if isinstance(e, psycopg.OperationalError):
+        return {"error": f"cannot reach the database: {e}"}
+    diag = e.diag
+    message = diag.message_primary or str(e)
+    for extra in (diag.message_detail, diag.message_hint):
+        if extra:
+            message += f" ({extra})"
+    return {"error": f"{diag.sqlstate or ''} {message}".strip()}
+
+
 def run_sql(sql: str, dsn: str = LLM_DSN) -> dict:
     """Run one read-only query; at most MAX_ROWS rows come back.
 
@@ -90,8 +112,7 @@ def run_sql(sql: str, dsn: str = LLM_DSN) -> dict:
         return {"error": "the query is empty"}
     try:
         with connect(dsn) as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
-            conn.execute(f"SET LOCAL statement_timeout = '{TIMEOUT}'")
+            read_only(conn)
             # Prepared, so that the server refuses more than one statement:
             # the subquery alone can be closed early by the text itself.
             cur = conn.execute(wrap_query(sql, MAX_ROWS + 1), prepare=True)
@@ -105,19 +126,8 @@ def run_sql(sql: str, dsn: str = LLM_DSN) -> dict:
                     for r, s in zip(rows, summarise_geometries(conn, [r[i] for r in rows])):
                         r[i] = s
             conn.rollback()
-    except psycopg.errors.QueryCanceled:
-        return {"error": f"the query ran longer than {TIMEOUT} and was stopped. Filter with the "
-                         "spatial indexes (geom && ST_Expand(...), ORDER BY geom <-> point) or "
-                         "aggregate before joining."}
-    except psycopg.OperationalError as e:
-        return {"error": f"cannot reach the database: {e}"}
     except psycopg.Error as e:
-        diag = e.diag
-        message = diag.message_primary or str(e)
-        for extra in (diag.message_detail, diag.message_hint):
-            if extra:
-                message += f" ({extra})"
-        return {"error": f"{diag.sqlstate or ''} {message}".strip()}
+        return query_error(e)
 
     result = {"columns": columns, "rows": [[plain(v) for v in r] for r in rows],
               "row_count": len(rows), "truncated": more}
@@ -130,6 +140,74 @@ def run_sql(sql: str, dsn: str = LLM_DSN) -> dict:
         result["note"] = (f"only the first {result['row_count']} rows are shown; "
                           "aggregate, or add a LIMIT and ORDER BY, to see what matters")
     return result
+
+
+# ------------------------------------------------------------- the map
+
+MAX_FEATURES = 5000          # drawn on the map from one query
+MAX_GEOJSON = 8_000_000      # bytes sent to the page
+
+
+def query_geojson(sql: str, dsn: str = LLM_DSN) -> tuple[dict, str | None]:
+    """Run one read-only query with a geom column for the map.
+
+    Returns what the model is told (how many features, of which types,
+    where, with which columns; or {"error": ...}) and the FeatureCollection
+    for the page, with every other column as a property. The model never
+    gets the coordinates: it already knows the query.
+    """
+    if not sql or not sql.strip():
+        return {"error": "the query is empty"}, None
+    # The row number marks the one row past the cap, which only says
+    # that there were more.
+    body = sql.strip().rstrip(";").strip()
+    query = f"""
+        SELECT json_build_object('type', 'FeatureCollection', 'features', coalesce(json_agg(
+                   json_build_object('type', 'Feature',
+                                     'geometry', ST_AsGeoJSON(ST_Transform(t.geom::geometry, 4326), 6)::json,
+                                     'properties', to_jsonb(t) - 'geom' - 'llm_n'))
+                   FILTER (WHERE t.llm_n <= {MAX_FEATURES}), '[]'))::text,
+               count(*) FILTER (WHERE t.llm_n <= {MAX_FEATURES}),
+               count(*) > {MAX_FEATURES},
+               count(*) FILTER (WHERE t.geom IS NULL),
+               array_agg(DISTINCT GeometryType(t.geom::geometry)) FILTER (WHERE t.geom IS NOT NULL),
+               ST_Extent(ST_Transform(t.geom::geometry, 4326)),
+               (SELECT array_agg(key) FROM jsonb_object_keys((array_agg(to_jsonb(t) - 'geom' - 'llm_n'))[1]) key)
+          FROM (SELECT q.*, row_number() OVER () AS llm_n FROM (
+{body}
+) AS q LIMIT {MAX_FEATURES + 1}) AS t
+    """
+    try:
+        with connect(dsn) as conn:
+            read_only(conn)
+            row = conn.execute(query, prepare=True).fetchone()
+            conn.rollback()
+    except psycopg.Error as e:
+        message = e.diag.message_primary or ""
+        if isinstance(e, psycopg.errors.UndefinedColumn) and re.search(r"\bt\.geom\b", message):
+            return {"error": "the query must return the geometry as a column named geom "
+                             "(e.g. SELECT name, point AS geom FROM ...)"}, None
+        if "unknown (0) SRID" in message:
+            return {"error": "the geometry has no SRID; give it one with ST_SetSRID(geom, 4326)"}, None
+        return query_error(e), None
+    geojson, shown, more, without, types, extent, columns = row
+    if not shown:
+        return {"error": "the query returned no rows, so nothing was drawn"}, None
+    if without == shown:
+        return {"error": "no row has a geometry in geom, so nothing was drawn"}, None
+    if len(geojson) > MAX_GEOJSON:
+        return {"error": f"the result is {len(geojson) // 1_000_000} MB, too big for the map "
+                         "(the limit is 8 MB): simplify the shapes with ST_Simplify(geom, 0.0001), "
+                         "or show fewer rows"}, None
+    # BOX(minx miny,maxx maxy) as [west, south, east, north].
+    extent = [round(float(v), 5) for v in re.findall(r"-?[\d.]+(?:e-?\d+)?", extent)]
+    result = {"shown": shown, "geometry_types": types, "columns": columns or [],
+              "extent": extent, "truncated": more}
+    if without:
+        result["without_geometry"] = without
+    if more:
+        result["note"] = f"only the first {MAX_FEATURES} rows are drawn"
+    return result, geojson
 
 
 # ------------------------------------------------------------- the schema

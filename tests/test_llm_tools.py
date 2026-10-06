@@ -4,14 +4,15 @@ login also without that role (db/app/llm_role.sql)."""
 
 import datetime
 import decimal
+import json
 import os
 import unittest
 
 import psycopg
 
-from web.llm_tools import (LLM_DSN, MAX_CELL, MAX_ROWS, data_issue_index, describe_table,
-                           parse_comments, plain, read_data_issues, run_sql, schema_summary,
-                           wrap_query)
+from web.llm_tools import (LLM_DSN, MAX_CELL, MAX_FEATURES, MAX_ROWS, data_issue_index,
+                           describe_table, parse_comments, plain, query_geojson, read_data_issues,
+                           run_sql, schema_summary, wrap_query)
 
 DSN = os.environ.get("DATABASE_URL", "host=127.0.0.1 dbname=urbandata user=urbanuser")
 
@@ -166,6 +167,50 @@ class RunSqlTest(unittest.TestCase):
 
     def test_an_empty_query(self):
         self.assertEqual(run_sql("  ", DSN), {"error": "the query is empty"})
+
+
+class QueryGeojsonTest(unittest.TestCase):
+    POINT = "ST_SetSRID(ST_MakePoint(23.32, 42.69), 4326)"
+
+    @classmethod
+    def setUpClass(cls):
+        connect().close()
+
+    def test_features_with_their_columns(self):
+        result, geojson = query_geojson(f"SELECT 'Сердика' AS name, 3 AS n, {self.POINT} AS geom;", DSN)
+        self.assertEqual(result, {"shown": 1, "geometry_types": ["POINT"], "columns": ["n", "name"],
+                                  "extent": [23.32, 42.69, 23.32, 42.69], "truncated": False})
+        doc = json.loads(geojson)
+        self.assertEqual(doc["features"], [{"type": "Feature", "properties": {"name": "Сердика", "n": 3},
+                                            "geometry": {"type": "Point", "coordinates": [23.32, 42.69]}}])
+
+    def test_geography_and_other_srids_come_out_in_degrees(self):
+        _, geojson = query_geojson(f"SELECT ST_Transform({self.POINT}, 3857)::geometry AS geom", DSN)
+        x, y = json.loads(geojson)["features"][0]["geometry"]["coordinates"]
+        self.assertAlmostEqual(x, 23.32, 5)
+        _, geojson = query_geojson(f"SELECT {self.POINT}::geography AS geom", DSN)
+        self.assertEqual(json.loads(geojson)["features"][0]["geometry"]["coordinates"], [23.32, 42.69])
+
+    def test_features_are_capped(self):
+        result, geojson = query_geojson(f"SELECT i, {self.POINT} AS geom FROM generate_series(1, {MAX_FEATURES + 10}) i", DSN)
+        self.assertEqual(result["shown"], MAX_FEATURES)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(len(json.loads(geojson)["features"]), MAX_FEATURES)
+
+    def test_rows_without_a_geometry_are_counted(self):
+        result, _ = query_geojson(f"SELECT {self.POINT} AS geom UNION ALL SELECT NULL", DSN)
+        self.assertEqual(result["without_geometry"], 1)
+
+    def test_errors(self):
+        for sql, error in [("SELECT 1 AS x", "named geom"),
+                           ("SELECT ST_MakePoint(1, 2) AS geom", "no SRID"),
+                           (f"SELECT {self.POINT} AS geom WHERE false", "no rows"),
+                           ("SELECT NULL::geometry AS geom", "no row has a geometry"),
+                           (f"SELECT 1; SELECT {self.POINT} AS geom", "syntax error"),
+                           ("DELETE FROM app.focuses RETURNING id, NULL::geometry AS geom", "syntax error")]:
+            result, geojson = query_geojson(sql, DSN)
+            self.assertIn(error, result.get("error", ""), sql)
+            self.assertIsNone(geojson)
 
 
 class SchemaTest(unittest.TestCase):

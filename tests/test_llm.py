@@ -4,6 +4,7 @@ replays scripted streams; nothing is sent to OpenAI."""
 import json
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import httpx
 import openai
@@ -128,6 +129,43 @@ class RunTurnTest(unittest.TestCase):
     def test_a_stream_without_its_end_is_an_error(self):
         events = turn(FakeAPI([SimpleNamespace(type="response.output_text.delta", delta="Fo")]))
         self.assertEqual(events[-1], {"type": "error", "message": "the model's answer was cut off"})
+
+    def test_a_view_goes_to_the_page_not_to_the_model(self):
+        api = FakeAPI(completed(call("show", {})), completed(message("Shown.")))
+        events = turn(api, tools={"show": lambda a: {"shown": 2, "view": {"kind": "layer"}}})
+        self.assertIn({"type": "view", "call_id": "c1", "view": {"kind": "layer"}}, events)
+        self.assertIn({"type": "tool_result", "call_id": "c1", "output": {"shown": 2}}, events)
+        self.assertEqual(api.requests[1]["input"][-1]["output"], '{"shown": 2}')
+        kinds = [e["type"] for e in events]
+        self.assertLess(kinds.index("view"), kinds.index("tool_result"))
+
+
+class ShowOnMapTest(unittest.TestCase):
+    GEOJSON = '{"type": "FeatureCollection", "features": []}'
+    RESULT = {"shown": 1, "geometry_types": ["POINT"], "columns": ["name"],
+              "extent": [23.3, 42.7, 23.3, 42.7], "truncated": False}
+
+    def show(self, **args):
+        args = {"sql": "SELECT ...", "title": "Stations", "color": None, "label_column": None, **args}
+        with mock.patch("web.llm.llm_tools.query_geojson", return_value=(dict(self.RESULT), self.GEOJSON)):
+            return llm.show_on_map(args)
+
+    def test_the_layer_is_the_view(self):
+        r = self.show(color="#E6550D", label_column="name")
+        self.assertEqual(r.pop("view"), {"kind": "layer", "title": "Stations", "color": "#E6550D",
+                                         "label_column": "name",
+                                         "geojson": {"type": "FeatureCollection", "features": []}})
+        self.assertEqual(r, self.RESULT)
+
+    def test_a_bad_color_or_label_is_dropped(self):
+        r = self.show(color="red", label_column="nope")
+        self.assertIsNone(r["view"]["color"])
+        self.assertIsNone(r["view"]["label_column"])
+        self.assertEqual(r["note"], "no column nope to label with")
+
+    def test_an_error_has_no_view(self):
+        with mock.patch("web.llm.llm_tools.query_geojson", return_value=({"error": "bad"}, None)):
+            self.assertEqual(llm.show_on_map({"sql": "x", "title": "t"}), {"error": "bad"})
 
 
 class PromptTest(unittest.TestCase):

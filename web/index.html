@@ -154,6 +154,12 @@
   .chat-tool.running summary .status { color: var(--accent); }
   .chat-tool.failed summary .status { color: var(--bad); }
   .chat-table { max-height: 240px; overflow: auto; }
+  .chat-tool .result button { font: inherit; font-size: 12px; color: var(--text); background: var(--bg); cursor: pointer;
+                              border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; margin-top: 4px; }
+  .chat-popup { color: #1d1f23; font-size: 12px; }
+  .chat-popup dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 0; max-height: 260px; overflow-y: auto; }
+  .chat-popup dt { color: #6b7079; }
+  .chat-popup dd { margin: 0; overflow-wrap: anywhere; }
   .chat-error { color: var(--bad); font-size: 12px; margin-top: 4px; }
   #chat-form { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); align-items: flex-end; }
   #chat-input { flex: 1; resize: none; font: inherit; color: var(--text); background: var(--bg);

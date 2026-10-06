@@ -59,12 +59,47 @@ TOOLS = [
         "parameters": strict_object({"numbers": {"type": "array", "items": {"type": "integer"},
                                                  "description": "Issue numbers from the index."}}),
     },
+    {
+        "type": "function", "name": "show_on_map", "strict": True,
+        "description": (
+            "Draw the rows of a read-only query on the user's map, as one layer over what is "
+            "there, and zoom to them. The query must return the geometry as a column named geom; "
+            "every other column is shown when a feature is clicked and in the list under the "
+            f"map, so name them for a reader. At most {llm_tools.MAX_FEATURES} rows are drawn. "
+            "You get back how many were drawn and where, not the rows."),
+        "parameters": strict_object({
+            "sql": {"type": "string", "description": "The query, with a geom column."},
+            "title": {"type": "string", "description": "What the layer shows, in a few words."},
+            "color": {"type": ["string", "null"], "description": "#rrggbb, or null for the default."},
+            "label_column": {"type": ["string", "null"],
+                             "description": "A column to write next to each feature, or null."},
+        }),
+    },
 ]
+
+COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def show_on_map(a: dict) -> dict:
+    """Run the query for the map; the layer goes to the page as the
+    result's "view", which the model does not see."""
+    result, geojson = llm_tools.query_geojson(a["sql"])
+    if geojson is None:
+        return result
+    label = a.get("label_column")
+    if label and label not in result["columns"]:
+        result["note"] = (result.get("note", "") + f"; no column {label} to label with").lstrip("; ")
+        label = None
+    color = a.get("color") if COLOR.match(a.get("color") or "") else None
+    return {**result, "view": {"kind": "layer", "title": a["title"], "color": color,
+                               "label_column": label, "geojson": json.loads(geojson)}}
+
 
 SERVER_TOOLS = {
     "run_sql": lambda a: llm_tools.run_sql(a["sql"]),
     "describe_table": lambda a: llm_tools.describe_table(a["table"]),
     "read_data_issues": lambda a: llm_tools.read_data_issues(a["numbers"]),
+    "show_on_map": show_on_map,
 }
 
 
@@ -110,7 +145,11 @@ How to work:
   data is, and mark what is a fact from the data and what is your
   inference.
 - If the data cannot answer the question, say so and say what is missing,
-  rather than guessing."""
+  rather than guessing.
+- The user sees a map of Sofia next to this chat. When an answer is about
+  places (where something is, which areas stand out), show them with
+  show_on_map, and say in the answer what the layer shows. One layer is
+  shown at a time; a new one replaces the last."""
 
 
 _tables = None
@@ -163,7 +202,8 @@ def run_turn(items: list[dict], api=None, tools: dict = SERVER_TOOLS,
     Yields events for the page:
       {"type": "text", "delta": "..."}                 the answer as it is written
       {"type": "tool", "call_id", "name", "arguments"} a tool is about to run
-      {"type": "tool_result", "call_id", "output"}     ... and what it gave
+      {"type": "view", "call_id", "view"}              what the tool shows on the page
+      {"type": "tool_result", "call_id", "output"}     ... and what it gave the model
       {"type": "items", "items": [...]}                to append to the conversation
       {"type": "error", "message": "..."}              the turn stopped
       {"type": "done"}                                 the turn is over
@@ -218,6 +258,10 @@ def run_turn(items: list[dict], api=None, tools: dict = SERVER_TOOLS,
             yield {"type": "tool", "call_id": call["call_id"], "name": call["name"],
                    "arguments": call["arguments"]}
             result = call_tool(call["name"], call["arguments"], tools)
+            # What the page should show (a map layer) is for the page only.
+            view = result.pop("view", None) if isinstance(result, dict) else None
+            if view:
+                yield {"type": "view", "call_id": call["call_id"], "view": view}
             yield {"type": "tool_result", "call_id": call["call_id"], "output": result}
             item = {"type": "function_call_output", "call_id": call["call_id"],
                     "output": json.dumps(result, ensure_ascii=False)}

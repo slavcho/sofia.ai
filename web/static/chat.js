@@ -8,10 +8,16 @@
 // ends well, so a stopped or failed turn never leaves a tool call without
 // its output, which the API would refuse on the next question.
 //
-// Uses the page's esc(); marked and DOMPurify render the answers.
+// A tool may also show something on the page (a "view" event): a layer
+// drawn from a query (show_on_map), kept in chatViews by call id so it
+// can be shown again.
+//
+// Uses the page's esc() and map; marked and DOMPurify render the answers.
 
 // chatId changes with every new chat, so a turn stopped by it is not kept.
 let chatItems = [], chatAbort = null, chatId = 0;
+let chatViews = {}, chatShown = null, chatPopup = null;
+const CHAT_COLOR = '#e6550d';
 
 const chatEl = id => document.getElementById(id);
 
@@ -37,14 +43,16 @@ const TOOL_LABELS = {
   run_sql: a => ['Query', a.sql],
   describe_table: a => [`Table ${a.table}`, ''],
   read_data_issues: a => [`Data issues ${(a.numbers || []).join(', ')}`, ''],
+  show_on_map: a => [`Map: ${a.title}`, a.sql],
 };
 
-function toolLine(name, args) {
+function toolLine(callId, name, args) {
   let a = {};
   try { a = JSON.parse(args); } catch (e) { /* shown raw below */ }
   const [label, code] = (TOOL_LABELS[name] || (() => [name, args]))(a);
   const d = document.createElement('details');
   d.className = 'chat-tool running';
+  d.dataset.call = callId;
   d.innerHTML = `<summary><span class="label">${esc(label)}</span> <span class="sub status">running…</span></summary>
     ${code ? `<pre>${esc(code)}</pre>` : ''}<div class="result"></div>`;
   return d;
@@ -57,6 +65,10 @@ function toolResult(d, output) {
     d.classList.add('failed');
     status.textContent = 'error';
     result.innerHTML = `<div class="chat-error">${esc(output.error)}</div>`;
+  } else if (output?.shown != null) {
+    status.textContent = `${output.shown}${output.truncated ? '+' : ''} on the map`;
+    result.innerHTML = `${output.note ? `<div class="sub">${esc(output.note)}</div>` : ''}
+      <button type="button" data-view="show">Show again</button> <button type="button" data-view="hide">Hide</button>`;
   } else if (output?.columns) {
     status.textContent = `${output.row_count}${output.truncated ? '+' : ''} rows`;
     const rows = output.rows.slice(0, 20);
@@ -119,7 +131,10 @@ async function askChat(question) {
         if (stick) log.scrollTop = log.scrollHeight;
       } else if (e.type === 'tool') {
         block = null;
-        show(tools[e.call_id] = toolLine(e.name, e.arguments));
+        show(tools[e.call_id] = toolLine(e.call_id, e.name, e.arguments));
+      } else if (e.type === 'view') {
+        chatViews[e.call_id] = e.view;
+        showChatView(e.call_id);
       } else if (e.type === 'tool_result') {
         if (tools[e.call_id]) toolResult(tools[e.call_id], e.output);
       } else if (e.type === 'items') {
@@ -150,10 +165,76 @@ async function askChat(question) {
   }
 }
 
+// ------------------------------------------------------------ the views
+
+// Every coordinate pair in a geometry, for the bounds to zoom to.
+function* coordinates(c) {
+  if (typeof c[0] === 'number') yield c;
+  else for (const x of c) yield* coordinates(x);
+}
+
+function addChatLayers() {
+  map.addSource('chat', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  const is = (...types) => ['match', ['geometry-type'], types, true, false];
+  map.addLayer({ id: 'chat-fill', type: 'fill', source: 'chat', filter: is('Polygon', 'MultiPolygon'),
+                 paint: { 'fill-color': CHAT_COLOR, 'fill-opacity': 0.3 } });
+  map.addLayer({ id: 'chat-line', type: 'line', source: 'chat', filter: ['!', is('Point', 'MultiPoint')],
+                 paint: { 'line-color': CHAT_COLOR, 'line-width': 2 } });
+  map.addLayer({ id: 'chat-point', type: 'circle', source: 'chat', filter: is('Point', 'MultiPoint'),
+                 paint: { 'circle-color': CHAT_COLOR, 'circle-radius': 6,
+                          'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
+  map.addLayer({ id: 'chat-label', type: 'symbol', source: 'chat',
+                 layout: { 'text-field': '', 'text-font': ['Noto Sans Regular'], 'text-size': 12,
+                           'text-offset': [0, 1.1], 'text-anchor': 'top', 'text-optional': true },
+                 paint: { 'text-color': '#222', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
+  for (const id of ['chat-fill', 'chat-line', 'chat-point']) {
+    map.on('click', id, e => {
+      // Several layers may be under the click; one popup is enough.
+      if (e.chatHandled) return;
+      e.chatHandled = true;
+      const p = e.features[0].properties, title = chatViews[chatShown]?.title || '';
+      chatPopup?.remove();
+      chatPopup = new maplibregl.Popup({ maxWidth: '340px' }).setLngLat(e.lngLat).setHTML(
+        `<div class="chat-popup"><b>${esc(title)}</b><dl>${Object.entries(p).map(([k, v]) =>
+          `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>`).addTo(map);
+    });
+    map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
+  }
+}
+
+// Draw a view on the map, in place of the one shown before, and zoom to it.
+function showChatView(callId) {
+  const view = chatViews[callId];
+  if (!view) return;
+  // The page adds its own layers on load; the chat's go on top of them.
+  if (!map.isStyleLoaded() || !map.getSource('stations')) { map.once('idle', () => showChatView(callId)); return; }
+  if (!map.getSource('chat')) addChatLayers();
+  const color = view.color || CHAT_COLOR;
+  map.getSource('chat').setData(view.geojson);
+  map.setPaintProperty('chat-fill', 'fill-color', color);
+  map.setPaintProperty('chat-line', 'line-color', color);
+  map.setPaintProperty('chat-point', 'circle-color', color);
+  map.setLayoutProperty('chat-label', 'text-field', view.label_column ? ['to-string', ['get', view.label_column]] : '');
+  chatPopup?.remove();
+  chatShown = callId;
+  const bounds = new maplibregl.LngLatBounds();
+  for (const f of view.geojson.features) if (f.geometry) for (const c of coordinates(f.geometry.coordinates)) bounds.extend(c);
+  if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+}
+
+function hideChatView() {
+  chatShown = null;
+  chatPopup?.remove();
+  map.getSource('chat')?.setData({ type: 'FeatureCollection', features: [] });
+}
+
 function newChat() {
   if (chatAbort) chatAbort.abort();
   chatId++;
   chatItems = [];
+  chatViews = {};
+  hideChatView();
   chatEl('chat-log').innerHTML = '';
   chatEl('chat-input').focus();
 }
@@ -172,6 +253,13 @@ function bindChat() {
   chatEl('chat-close').onclick = () => toggleChat(false);
   chatEl('chat-new').onclick = newChat;
   chatEl('chat-stop').onclick = () => chatAbort?.abort();
+  chatEl('chat-log').onclick = e => {
+    const b = e.target.closest('[data-view]');
+    if (!b) return;
+    const callId = b.closest('.chat-tool').dataset.call;
+    if (b.dataset.view === 'show') showChatView(callId);
+    else if (chatShown === callId) hideChatView();
+  };
   chatEl('chat-form').onsubmit = e => {
     e.preventDefault();
     const q = input.value.trim();
