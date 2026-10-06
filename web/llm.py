@@ -66,13 +66,30 @@ TOOLS = [
             "there, and zoom to them. The query must return the geometry as a column named geom; "
             "every other column is shown when a feature is clicked and in the list under the "
             f"map, so name them for a reader. At most {llm_tools.MAX_FEATURES} rows are drawn. "
-            "You get back how many were drawn and where, not the rows."),
+            "You get back how many were drawn and where, not the rows. For what the map "
+            "already has, use show_focus instead."),
         "parameters": strict_object({
             "sql": {"type": "string", "description": "The query, with a geom column."},
             "title": {"type": "string", "description": "What the layer shows, in a few words."},
             "color": {"type": ["string", "null"], "description": "#rrggbb, or null for the default."},
             "label_column": {"type": ["string", "null"],
                              "description": "A column to write next to each feature, or null."},
+        }),
+    },
+    {
+        "type": "function", "name": "show_focus", "strict": True,
+        "description": (
+            "Set the user's map to some of its own layers, colour its areas by one of its "
+            "metrics and choose the list under the map, as the page's ready-made views do; "
+            "the page draws them with its legends and details. Use only the keys under "
+            "\"What the map can show\". It replaces the view the user had."),
+        "parameters": strict_object({
+            "title": {"type": "string", "description": "What the view shows, in a few words."},
+            "question": {"type": "string", "description": "The question it answers, in one sentence."},
+            "layers": {"type": "array", "items": {"type": "string"}, "description": "Layer keys to turn on."},
+            "area_kind": {"type": ["string", "null"], "description": "The areas to colour, or null for none."},
+            "metric": {"type": ["string", "null"], "description": "The metric to colour them by, or null."},
+            "list": {"type": ["string", "null"], "description": "The list under the map, or null."},
         }),
     },
 ]
@@ -91,8 +108,45 @@ def show_on_map(a: dict) -> dict:
         result["note"] = (result.get("note", "") + f"; no column {label} to label with").lstrip("; ")
         label = None
     color = a.get("color") if COLOR.match(a.get("color") or "") else None
-    return {**result, "view": {"kind": "layer", "title": a["title"], "color": color,
-                               "label_column": label, "geojson": json.loads(geojson)}}
+    return {**result, "view": {"kind": "layer", "title": a["title"], "color": color, "label_column": label,
+                               "columns": result["columns"], "geojson": json.loads(geojson)}}
+
+
+def focus_problems(a: dict, catalog: dict) -> list[str]:
+    """What the map cannot show of a show_focus call; the server's side
+    of checkFocus in web/static/focuses.js."""
+    keys = lambda name: {x["key"]: x for x in catalog.get(name, [])}
+    layers, metrics, lists = keys("layers"), keys("metrics"), keys("lists")
+    errors = [f"unknown layer {k}" for k in a["layers"] if k not in layers]
+    kind, metric = a.get("area_kind"), a.get("metric")
+    if kind and kind not in catalog.get("area_kinds", []):
+        errors.append(f"unknown area kind {kind}")
+    if metric and metric not in metrics:
+        errors.append(f"unknown metric {metric}")
+    elif metric and not kind:
+        errors.append("a metric needs an area kind")
+    elif metric and kind and metrics[metric].get("kinds") and kind not in metrics[metric]["kinds"]:
+        errors.append(f"{metric} is only given by {', '.join(metrics[metric]['kinds'])}")
+    if a.get("list") and a["list"] not in lists:
+        errors.append(f"unknown list {a['list']}")
+    return errors
+
+
+def show_focus(a: dict, catalog: dict | None) -> dict:
+    """Check a view of the map's own data against what the page says it
+    can show; the focus goes to the page as the result's "view"."""
+    if not catalog:
+        return {"error": "the page did not say what its map can show; use show_on_map"}
+    errors = focus_problems(a, catalog)
+    if errors:
+        return {"error": "; ".join(errors)}
+    focus = {"id": "chat", "title": a["title"], "question": a["question"], "layers": a["layers"]}
+    if a.get("area_kind"):
+        focus["areas"] = {"kind": a["area_kind"], "metric": a.get("metric")}
+    if a.get("list"):
+        focus["list"] = a["list"]
+    focus.update(listScope="view", drawer="open")
+    return {"shown_focus": a["title"], "view": {"kind": "focus", "focus": focus}}
 
 
 SERVER_TOOLS = {
@@ -101,6 +155,11 @@ SERVER_TOOLS = {
     "read_data_issues": lambda a: llm_tools.read_data_issues(a["numbers"]),
     "show_on_map": show_on_map,
 }
+
+
+def tools_for(catalog: dict | None) -> dict:
+    """The tools of one turn: show_focus needs what this page can show."""
+    return {**SERVER_TOOLS, "show_focus": lambda a: show_focus(a, catalog)}
 
 
 def call_tool(name: str, arguments: str, tools: dict = SERVER_TOOLS) -> dict:
@@ -149,7 +208,9 @@ How to work:
 - The user sees a map of Sofia next to this chat. When an answer is about
   places (where something is, which areas stand out), show them with
   show_on_map, and say in the answer what the layer shows. One layer is
-  shown at a time; a new one replaces the last."""
+  shown at a time; a new one replaces the last. When the map's own
+  layers or metrics answer the question, use show_focus: the page then
+  explains them with its legends and details."""
 
 
 _tables = None
@@ -187,6 +248,27 @@ def base_instructions() -> str:
     ])
 
 
+def catalog_section(catalog: dict | None) -> str:
+    """What the user's map can show, as the page sent it; after the
+    base instructions, so that those stay a cacheable prefix."""
+    if not catalog:
+        return ""
+    lines = lambda name, fmt: "\n".join(fmt(x) for x in catalog.get(name, []))
+    only = lambda m: f" ({', '.join(m['kinds'])} only)" if m.get("kinds") else ""
+    return f"""# What the map can show
+
+For show_focus. Layers (key: what it draws):
+{lines("layers", lambda x: f"- {x['key']}: {x['label']}")}
+
+Area kinds: {", ".join(catalog.get("area_kinds", []))}
+
+Metrics to colour the areas by:
+{lines("metrics", lambda m: f"- {m['key']}: {m['label']}{only(m)}")}
+
+Lists under the map:
+{lines("lists", lambda x: f"- {x['key']}: {x['label']}")}"""
+
+
 # -------------------------------------------------------------- the turn
 
 def client() -> openai.OpenAI:
@@ -194,10 +276,11 @@ def client() -> openai.OpenAI:
     return openai.OpenAI(max_retries=3, timeout=180)
 
 
-def run_turn(items: list[dict], api=None, tools: dict = SERVER_TOOLS,
-             instructions: str | None = None) -> Iterator[dict]:
+def run_turn(items: list[dict], api=None, tools: dict | None = None,
+             instructions: str | None = None, catalog: dict | None = None) -> Iterator[dict]:
     """Continue the conversation `items` (ending with the user's message)
-    until the model answers without calling a tool.
+    until the model answers without calling a tool. `catalog` is what the
+    user's map can show (see catalog_section).
 
     Yields events for the page:
       {"type": "text", "delta": "..."}                 the answer as it is written
@@ -213,7 +296,9 @@ def run_turn(items: list[dict], api=None, tools: dict = SERVER_TOOLS,
     except openai.OpenAIError as e:
         yield {"type": "error", "message": f"cannot use the OpenAI API: {e}"}
         return
-    instructions = instructions if instructions is not None else base_instructions()
+    if instructions is None:
+        instructions = "\n\n".join(filter(None, [base_instructions(), catalog_section(catalog)]))
+    tools = tools if tools is not None else tools_for(catalog)
     items = list(items)
     for _ in range(MAX_STEPS):
         response = None

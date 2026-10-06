@@ -1,11 +1,12 @@
 // The drawer under the map: a sortable table of the schools,
-// kindergartens, parks, stations, public transport stops and lines, areas
-// or data issues in view (or in the whole city), with a CSV download of
-// exactly what it shows.
+// kindergartens, parks, stations, public transport stops and lines, areas,
+// data issues or the chat's layer in view (or in the whole city), with a
+// CSV download of exactly what it shows.
 //
 // Uses the page's data and functions (schools, kgs, parks, stations,
-// transitStops, transitRoutes, areaCache, allIssues, select*), so it is
-// loaded before the page's script but only called once the data is in.
+// transitStops, transitRoutes, areaCache, allIssues, select*) and the
+// chat's (chatViews, chatShown, chatPopupAt), so it is loaded before the
+// page's script but only called once the data is in.
 
 const DATE_COLUMNS = [
   { label: 'Data as of', value: p => p.data_as_of, csvOnly: true },
@@ -145,6 +146,27 @@ const LISTS = {
       { label: 'Issue', value: i => i.issue },
       { label: 'Area', value: i => i.area_kind ? (i.name || KIND_LABEL[i.area_kind] + ' #' + i.area_id) : '' },
       { label: 'Detail', value: i => i.detail }],
+  },
+  // The layer the chat drew (show_on_map), with the query's columns.
+  chat: {
+    label: 'From the chat', noun: 'rows',
+    empty: () => chatViews[chatShown]?.kind === 'layer' ? '' : 'Nothing from the chat on the map; ask in the chat.',
+    rows: () => {
+      const view = chatViews[chatShown];
+      return view?.kind !== 'layer' ? [] : view.geojson.features.map(f => ({ p: f.properties, geometry: f.geometry,
+        open: () => {
+          const [w, s, e, n] = bboxOf(f.geometry);
+          map.fitBounds([w, s, e, n], { padding: 80, maxZoom: 16 });
+          chatPopupAt([(w + e) / 2, (s + n) / 2], f.properties);
+        } }));
+    },
+    columns: () => {
+      const view = chatViews[chatShown];
+      if (view?.kind !== 'layer') return [{ label: '', value: () => '' }];
+      const values = k => view.geojson.features.map(f => f.properties[k]).filter(v => v != null);
+      return view.columns.map(k => ({ label: k, value: p => p[k],
+        num: values(k).length > 0 && values(k).every(v => typeof v === 'number'), plain: true }));
+    },
   },
 };
 const LIST_SCOPES = ['view', 'all'];

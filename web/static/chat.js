@@ -9,8 +9,10 @@
 // its output, which the API would refuse on the next question.
 //
 // A tool may also show something on the page (a "view" event): a layer
-// drawn from a query (show_on_map), kept in chatViews by call id so it
-// can be shown again.
+// drawn from a query (show_on_map), listed under the map too, or a focus
+// made of the map's own layers and metrics (show_focus). They are kept
+// in chatViews by call id so they can be shown again. So that the model
+// only asks for what this map has, every request says what that is.
 //
 // Uses the page's esc() and map; marked and DOMPurify render the answers.
 
@@ -44,6 +46,7 @@ const TOOL_LABELS = {
   describe_table: a => [`Table ${a.table}`, ''],
   read_data_issues: a => [`Data issues ${(a.numbers || []).join(', ')}`, ''],
   show_on_map: a => [`Map: ${a.title}`, a.sql],
+  show_focus: a => [`Map: ${a.title}`, JSON.stringify(a, null, 1)],
 };
 
 function toolLine(callId, name, args) {
@@ -69,6 +72,12 @@ function toolResult(d, output) {
     status.textContent = `${output.shown}${output.truncated ? '+' : ''} on the map`;
     result.innerHTML = `${output.note ? `<div class="sub">${esc(output.note)}</div>` : ''}
       <button type="button" data-view="show">Show again</button> <button type="button" data-view="hide">Hide</button>`;
+  } else if (output?.shown_focus) {
+    const problems = chatViews[d.dataset.call]?.problems || [];
+    d.classList.toggle('failed', problems.length > 0);
+    status.textContent = problems.length ? 'not shown' : 'shown';
+    result.innerHTML = problems.length ? `<div class="chat-error">${esc(problems.join('; '))}</div>`
+      : '<button type="button" data-view="show">Show again</button>';
   } else if (output?.columns) {
     status.textContent = `${output.row_count}${output.truncated ? '+' : ''} rows`;
     const rows = output.rows.slice(0, 20);
@@ -119,7 +128,7 @@ async function askChat(question) {
   try {
     const r = await fetch('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: turn }), signal: chatAbort.signal });
+      body: JSON.stringify({ input: turn, catalog: chatCatalog() }), signal: chatAbort.signal });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `the server answered ${r.status}`);
     answer.innerHTML = '';
     for await (const e of chatEvents(r)) {
@@ -134,6 +143,7 @@ async function askChat(question) {
         show(tools[e.call_id] = toolLine(e.call_id, e.name, e.arguments));
       } else if (e.type === 'view') {
         chatViews[e.call_id] = e.view;
+        if (e.view.kind === 'focus') e.view.problems = checkFocus(e.view.focus, METRICS, LISTS);
         showChatView(e.call_id);
       } else if (e.type === 'tool_result') {
         if (tools[e.call_id]) toolResult(tools[e.call_id], e.output);
@@ -173,6 +183,27 @@ function* coordinates(c) {
   else for (const x of c) yield* coordinates(x);
 }
 
+// What show_focus may use: the layer toggles, area kinds, metrics and
+// lists of this page.
+function chatCatalog() {
+  return {
+    layers: [...document.querySelectorAll('input[data-key]')].map(cb =>
+      ({ key: cb.dataset.key, label: cb.parentElement.textContent.trim() })),
+    area_kinds: FOCUS_AREA_KINDS,
+    metrics: Object.entries(METRICS).map(([key, m]) => ({ key, label: m.label, kinds: m.kinds || null })),
+    lists: Object.entries(LISTS).filter(([key]) => key !== 'chat').map(([key, l]) => ({ key, label: l.label })),
+  };
+}
+
+// A feature's columns in the query's order, without the empty ones.
+function chatPopupAt(lngLat, p) {
+  const view = chatViews[chatShown];
+  chatPopup?.remove();
+  chatPopup = new maplibregl.Popup({ maxWidth: '340px' }).setLngLat(lngLat).setHTML(
+    `<div class="chat-popup"><b>${esc(view?.title || '')}</b><dl>${(view?.columns || Object.keys(p))
+      .filter(k => p[k] != null).map(k => `<dt>${esc(k)}</dt><dd>${esc(p[k])}</dd>`).join('')}</dl></div>`).addTo(map);
+}
+
 function addChatLayers() {
   map.addSource('chat', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   const is = (...types) => ['match', ['geometry-type'], types, true, false];
@@ -192,23 +223,27 @@ function addChatLayers() {
       // Several layers may be under the click; one popup is enough.
       if (e.chatHandled) return;
       e.chatHandled = true;
-      const p = e.features[0].properties, title = chatViews[chatShown]?.title || '';
-      chatPopup?.remove();
-      chatPopup = new maplibregl.Popup({ maxWidth: '340px' }).setLngLat(e.lngLat).setHTML(
-        `<div class="chat-popup"><b>${esc(title)}</b><dl>${Object.entries(p).map(([k, v]) =>
-          `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>`).addTo(map);
+      chatPopupAt(e.lngLat, e.features[0].properties);
     });
     map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
     map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   }
 }
 
-// Draw a view on the map, in place of the one shown before, and zoom to it.
+// Show a view: a focus as the page's own, or a layer drawn in place of
+// the one shown before, zoomed to and listed under the map.
 function showChatView(callId) {
   const view = chatViews[callId];
-  if (!view) return;
-  // The page adds its own layers on load; the chat's go on top of them.
-  if (!map.isStyleLoaded() || !map.getSource('stations')) { map.once('idle', () => showChatView(callId)); return; }
+  if (!view || view.problems?.length) return;
+  // The page adds its own layers and its first focus on load; the chat's
+  // come after them.
+  if (!map.isStyleLoaded() || !currentFocus) { map.once('idle', () => showChatView(callId)); return; }
+  if (view.kind === 'focus') {
+    FOCUSES = FOCUSES.filter(f => f.id !== view.focus.id).concat({ ...view.focus, valid: true });
+    applyFocus(view.focus.id);
+    foldDrawer(view.focus.drawer !== 'open');
+    return;
+  }
   if (!map.getSource('chat')) addChatLayers();
   const color = view.color || CHAT_COLOR;
   map.getSource('chat').setData(view.geojson);
@@ -221,12 +256,15 @@ function showChatView(callId) {
   const bounds = new maplibregl.LngLatBounds();
   for (const f of view.geojson.features) if (f.geometry) for (const c of coordinates(f.geometry.coordinates)) bounds.extend(c);
   if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+  setList('chat', 'all');
+  foldDrawer(false);
 }
 
 function hideChatView() {
   chatShown = null;
   chatPopup?.remove();
   map.getSource('chat')?.setData({ type: 'FeatureCollection', features: [] });
+  if (listName === 'chat') renderList();
 }
 
 function newChat() {

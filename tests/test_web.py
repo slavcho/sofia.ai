@@ -154,7 +154,7 @@ class ChatEndpointTest(unittest.TestCase):
             return TestClient(app).post("/api/chat", json=body)
 
     def test_streams_the_events(self):
-        def turn(items):
+        def turn(items, catalog=None):
             self.assertEqual(items, self.INPUT["input"])
             yield {"type": "text", "delta": "Четири."}
             yield {"type": "done"}
@@ -164,7 +164,7 @@ class ChatEndpointTest(unittest.TestCase):
         self.assertEqual(r.text, 'data: {"type": "text", "delta": "Четири."}\n\ndata: {"type": "done"}\n\n')
 
     def test_a_failure_becomes_an_error_event(self):
-        def turn(items):
+        def turn(items, catalog=None):
             yield {"type": "text", "delta": "Fo"}
             raise RuntimeError("boom")
         events = [json.loads(line[6:]) for line in self.post(self.INPUT, turn).text.split("\n\n") if line]
@@ -173,6 +173,24 @@ class ChatEndpointTest(unittest.TestCase):
     def test_a_bad_conversation_is_refused(self):
         r = self.post({"input": [{"role": "system", "content": "x"}]}, None)
         self.assertEqual(r.status_code, 400)
+
+    CATALOG = {"layers": [{"key": "stations", "label": "Stations"}], "area_kinds": ["district"],
+               "metrics": [{"key": "density", "label": "Residents per km²", "kinds": None}],
+               "lists": [{"key": "areas", "label": "Areas"}]}
+
+    def test_the_catalog_goes_to_the_turn(self):
+        def turn(items, catalog=None):
+            self.assertEqual(catalog, self.CATALOG)
+            yield {"type": "done"}
+        # A failed assertion in the turn would come back as an error event.
+        self.assertEqual(self.post({**self.INPUT, "catalog": self.CATALOG}, turn).text, 'data: {"type": "done"}\n\n')
+
+    def test_a_bad_catalog_is_refused(self):
+        for catalog in ["x", {"layers": "x"}, {"layers": [{"key": 1, "label": "x"}]},
+                        {"metrics": [{"key": "a", "label": "b", "kinds": "district"}]},
+                        {"area_kinds": [1]}, {"layers": [{"key": "a", "label": "x" * 20_000}]}]:
+            r = self.post({**self.INPUT, "catalog": catalog}, None)
+            self.assertEqual(r.status_code, 400, catalog)
 
 
 if __name__ == "__main__":

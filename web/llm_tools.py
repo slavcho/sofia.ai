@@ -171,8 +171,7 @@ def query_geojson(sql: str, dsn: str = LLM_DSN) -> tuple[dict, str | None]:
                count(*) > {MAX_FEATURES},
                count(*) FILTER (WHERE t.geom IS NULL),
                array_agg(DISTINCT GeometryType(t.geom::geometry)) FILTER (WHERE t.geom IS NOT NULL),
-               ST_Extent(ST_Transform(t.geom::geometry, 4326)),
-               (SELECT array_agg(key) FROM jsonb_object_keys((array_agg(to_jsonb(t) - 'geom' - 'llm_n'))[1]) key)
+               ST_Extent(ST_Transform(t.geom::geometry, 4326))
           FROM (SELECT q.*, row_number() OVER () AS llm_n FROM (
 {body}
 ) AS q LIMIT {MAX_FEATURES + 1}) AS t
@@ -181,6 +180,8 @@ def query_geojson(sql: str, dsn: str = LLM_DSN) -> tuple[dict, str | None]:
         with connect(dsn) as conn:
             read_only(conn)
             row = conn.execute(query, prepare=True).fetchone()
+            # jsonb sorts the properties; the columns as the query names them.
+            names = conn.execute(f"SELECT * FROM (\n{body}\n) AS q LIMIT 0", prepare=True).description
             conn.rollback()
     except psycopg.Error as e:
         message = e.diag.message_primary or ""
@@ -190,7 +191,8 @@ def query_geojson(sql: str, dsn: str = LLM_DSN) -> tuple[dict, str | None]:
         if "unknown (0) SRID" in message:
             return {"error": "the geometry has no SRID; give it one with ST_SetSRID(geom, 4326)"}, None
         return query_error(e), None
-    geojson, shown, more, without, types, extent, columns = row
+    geojson, shown, more, without, types, extent = row
+    columns = list(dict.fromkeys(c.name for c in names if c.name != "geom"))
     if not shown:
         return {"error": "the query returned no rows, so nothing was drawn"}, None
     if without == shown:
@@ -201,7 +203,7 @@ def query_geojson(sql: str, dsn: str = LLM_DSN) -> tuple[dict, str | None]:
                          "or show fewer rows"}, None
     # BOX(minx miny,maxx maxy) as [west, south, east, north].
     extent = [round(float(v), 5) for v in re.findall(r"-?[\d.]+(?:e-?\d+)?", extent)]
-    result = {"shown": shown, "geometry_types": types, "columns": columns or [],
+    result = {"shown": shown, "geometry_types": types, "columns": columns,
               "extent": extent, "truncated": more}
     if without:
         result["without_geometry"] = without

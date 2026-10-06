@@ -178,7 +178,8 @@ class QueryGeojsonTest(unittest.TestCase):
 
     def test_features_with_their_columns(self):
         result, geojson = query_geojson(f"SELECT 'Сердика' AS name, 3 AS n, {self.POINT} AS geom;", DSN)
-        self.assertEqual(result, {"shown": 1, "geometry_types": ["POINT"], "columns": ["n", "name"],
+        # The columns in the query's order, for the list under the map.
+        self.assertEqual(result, {"shown": 1, "geometry_types": ["POINT"], "columns": ["name", "n"],
                                   "extent": [23.32, 42.69, 23.32, 42.69], "truncated": False})
         doc = json.loads(geojson)
         self.assertEqual(doc["features"], [{"type": "Feature", "properties": {"name": "Сердика", "n": 3},

@@ -157,18 +157,41 @@ def chat_problems(items) -> list[str]:
     return errors
 
 
+MAX_CATALOG = 20_000     # characters; it goes into every prompt
+
+
+def catalog_problems(catalog) -> list[str]:
+    """What is wrong with the page's account of what its map can show
+    (see llm.catalog_section); empty if nothing."""
+    if not isinstance(catalog, dict):
+        return ["catalog is not an object"]
+    strings = lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v)
+    entry = lambda x: (isinstance(x, dict) and isinstance(x.get("key"), str)
+                       and isinstance(x.get("label"), str)
+                       and (x.get("kinds") is None or strings(x["kinds"])))
+    errors = [f"catalog {name} is not a list of keys with labels"
+              for name in ("layers", "metrics", "lists")
+              if not (isinstance(catalog.get(name, []), list) and all(map(entry, catalog.get(name, []))))]
+    if not strings(catalog.get("area_kinds", [])):
+        errors.append("catalog area_kinds is not a list of strings")
+    if len(json.dumps(catalog, ensure_ascii=False)) > MAX_CATALOG:
+        errors.append(f"catalog is longer than {MAX_CATALOG} characters")
+    return errors
+
+
 # One turn of the chat, as server-sent events (see llm.run_turn); the
 # page keeps the conversation and sends all of it every time.
 @app.post("/api/chat")
 def chat(body: dict = Body(...)):
     items = body.get("input")
-    problems = chat_problems(items)
+    catalog = body.get("catalog")
+    problems = chat_problems(items) + (catalog_problems(catalog) if catalog is not None else [])
     if problems:
         raise HTTPException(400, "; ".join(problems))
 
     def events():
         try:
-            for event in llm.run_turn(items):
+            for event in llm.run_turn(items, catalog=catalog):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             log.exception("chat turn failed")

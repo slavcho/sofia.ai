@@ -153,7 +153,7 @@ class ShowOnMapTest(unittest.TestCase):
     def test_the_layer_is_the_view(self):
         r = self.show(color="#E6550D", label_column="name")
         self.assertEqual(r.pop("view"), {"kind": "layer", "title": "Stations", "color": "#E6550D",
-                                         "label_column": "name",
+                                         "label_column": "name", "columns": ["name"],
                                          "geojson": {"type": "FeatureCollection", "features": []}})
         self.assertEqual(r, self.RESULT)
 
@@ -168,7 +168,61 @@ class ShowOnMapTest(unittest.TestCase):
             self.assertEqual(llm.show_on_map({"sql": "x", "title": "t"}), {"error": "bad"})
 
 
+CATALOG = {
+    "layers": [{"key": "stations", "label": "Stations"}, {"key": "schools", "label": "Schools"}],
+    "area_kinds": ["district", "planning_unit"],
+    "metrics": [{"key": "share_500", "label": "Within 500 m of a station", "kinds": None},
+                {"key": "sealed_soil_pct", "label": "Sealed soil", "kinds": ["planning_unit"]}],
+    "lists": [{"key": "schools", "label": "Schools"}, {"key": "areas", "label": "Areas"}],
+}
+
+
+class ShowFocusTest(unittest.TestCase):
+    ARGS = {"title": "Metro access", "question": "Who lives near the metro?", "layers": ["stations"],
+            "area_kind": "district", "metric": "share_500", "list": "areas"}
+
+    def test_the_focus_is_the_view(self):
+        r = llm.show_focus(self.ARGS, CATALOG)
+        self.assertEqual(r, {"shown_focus": "Metro access", "view": {"kind": "focus", "focus": {
+            "id": "chat", "title": "Metro access", "question": "Who lives near the metro?",
+            "layers": ["stations"], "areas": {"kind": "district", "metric": "share_500"},
+            "list": "areas", "listScope": "view", "drawer": "open"}}})
+
+    def test_without_areas_or_list(self):
+        r = llm.show_focus({**self.ARGS, "area_kind": None, "metric": None, "list": None}, CATALOG)
+        focus = r["view"]["focus"]
+        self.assertNotIn("areas", focus)
+        self.assertNotIn("list", focus)
+
+    def test_what_the_map_does_not_have_is_refused(self):
+        for args, error in [({"layers": ["nope"]}, "unknown layer nope"),
+                            ({"area_kind": "street"}, "unknown area kind street"),
+                            ({"metric": "nope"}, "unknown metric nope"),
+                            ({"metric": "sealed_soil_pct"}, "sealed_soil_pct is only given by planning_unit"),
+                            ({"area_kind": None}, "a metric needs an area kind"),
+                            ({"list": "nope"}, "unknown list nope")]:
+            r = llm.show_focus({**self.ARGS, **args}, CATALOG)
+            self.assertIn(error, r.get("error", ""), args)
+            self.assertNotIn("view", r)
+
+    def test_without_a_catalog(self):
+        self.assertIn("error", llm.show_focus(self.ARGS, None))
+
+    def test_the_catalog_reaches_the_tool(self):
+        api = FakeAPI(completed(call("show_focus", self.ARGS)), completed(message("Shown.")))
+        events = list(llm.run_turn([{"role": "user", "content": "x"}], api=api, instructions="test",
+                                   catalog=CATALOG))
+        self.assertIn("view", [e["type"] for e in events])
+
+
 class PromptTest(unittest.TestCase):
+    def test_the_catalog_is_in_the_prompt(self):
+        text = llm.catalog_section(CATALOG)
+        self.assertIn("- stations: Stations", text)
+        self.assertIn("- sealed_soil_pct: Sealed soil (planning_unit only)", text)
+        self.assertIn("district, planning_unit", text)
+        self.assertEqual(llm.catalog_section(None), "")
+
     def test_the_prompt_has_the_principles_and_the_issue_index(self):
         prompt = llm.base_instructions()
         self.assertIn("Cite the source", prompt)
@@ -185,7 +239,7 @@ class PromptTest(unittest.TestCase):
             self.assertTrue(tool["strict"])
             self.assertEqual(sorted(p["required"]), sorted(p["properties"]), tool["name"])
             self.assertIs(p["additionalProperties"], False)
-            self.assertIn(tool["name"], llm.SERVER_TOOLS)
+            self.assertIn(tool["name"], llm.tools_for(CATALOG))
 
 
 if __name__ == "__main__":
