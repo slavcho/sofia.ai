@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Fetch the live transit feeds every minute (the cron job of the
+  README). launchd does not start a run while the previous one is still
+  going, so it needs no flock. Replace __REPO__ as in com.sofia.web.plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sofia.poll-live</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/deploy/run.sh</string>
+        <string>python3</string>
+        <string>poll_live.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>StandardOutPath</key>
+    <string>__REPO__/logs/live.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/logs/live.log</string>
+</dict>
+</plist>
