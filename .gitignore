@@ -6,3 +6,5 @@ __pycache__/
 logs/
 # Personal to-do list of resources that failed to download
 not-downloaded.txt
+# Secrets (OPENAI_API_KEY); loaded by the web server, never committed
+.env
