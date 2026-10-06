@@ -78,12 +78,19 @@ function toolResult(d, output) {
     status.textContent = problems.length ? 'not shown' : 'shown';
     result.innerHTML = problems.length ? `<div class="chat-error">${esc(problems.join('; '))}</div>`
       : '<button type="button" data-view="show">Show again</button>';
-  } else if (output?.columns) {
+  } else if (Array.isArray(output?.rows)) {
     status.textContent = `${output.row_count}${output.truncated ? '+' : ''} rows`;
     const rows = output.rows.slice(0, 20);
     result.innerHTML = `<div class="chat-table"><table><thead><tr>${output.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
       <tbody>${rows.map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
       ${output.rows.length > rows.length ? `<div class="sub">and ${output.rows.length - rows.length} more rows</div>` : ''}`;
+  } else if (output?.table && Array.isArray(output.columns)) {
+    // describe_table: the columns with what they mean.
+    status.textContent = `${output.columns.length} columns` +
+      (output.rows_estimate != null ? `, ~${output.rows_estimate.toLocaleString('en')} rows` : '');
+    result.innerHTML = `${output.about ? `<div class="sub">${esc(output.about)}</div>` : ''}
+      <div class="chat-table"><table><thead><tr><th>Column</th><th>Type</th><th>About</th></tr></thead>
+      <tbody>${output.columns.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.type)}</td><td>${esc(c.comment)}</td></tr>`).join('')}</tbody></table></div>`;
   } else {
     status.textContent = 'done';
   }
@@ -146,7 +153,14 @@ async function askChat(question) {
         if (e.view.kind === 'focus') e.view.problems = checkFocus(e.view.focus, METRICS, LISTS);
         showChatView(e.call_id);
       } else if (e.type === 'tool_result') {
-        if (tools[e.call_id]) toolResult(tools[e.call_id], e.output);
+        // A result the page cannot show must not cost the answer.
+        try {
+          if (tools[e.call_id]) toolResult(tools[e.call_id], e.output);
+        } catch (err) {
+          console.error('cannot show the result of', e.call_id, err);
+          tools[e.call_id].classList.remove('running');
+          tools[e.call_id].querySelector('.status').textContent = 'could not show the result';
+        }
       } else if (e.type === 'items') {
         added.push(...e.items);
       } else if (e.type === 'error') {
