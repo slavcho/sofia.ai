@@ -15,10 +15,12 @@ import re
 from pathlib import Path
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Path as PathParam, Query
+from fastapi import Body, FastAPI, HTTPException, Path as PathParam, Query
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from web import llm
 
 DSN = os.environ.get("DATABASE_URL", "host=127.0.0.1 dbname=urbandata user=urbanuser")
 HERE = Path(__file__).resolve().parent
@@ -128,6 +130,53 @@ def focuses():
         log.warning("only the built-in focuses: %s", e)
         stored = []
     return {**doc, "focuses": merge_focuses(doc["focuses"], stored)}
+
+
+CHAT_ITEMS = {"message", "function_call", "function_call_output", "reasoning"}
+MAX_CHAT_ITEMS = 1000
+
+
+def chat_problems(items) -> list[str]:
+    """What is wrong with a conversation sent by the page; empty if
+    nothing. Only items the page got from us, or the user's own messages,
+    may be in it: a system or developer message would override the prompt."""
+    if not isinstance(items, list) or not items:
+        return ["input is not a list of items"]
+    if len(items) > MAX_CHAT_ITEMS:
+        return [f"the conversation has more than {MAX_CHAT_ITEMS} items; start a new one"]
+    errors = []
+    for i, item in enumerate(items):
+        kind = item.get("type", "message") if isinstance(item, dict) else None
+        if kind not in CHAT_ITEMS:
+            errors.append(f"item {i} is not one of {', '.join(sorted(CHAT_ITEMS))}")
+        elif kind == "message" and item.get("role") not in ("user", "assistant"):
+            errors.append(f"item {i} is a message from neither the user nor the assistant")
+    last = items[-1]
+    if not (isinstance(last, dict) and last.get("type", "message") == "message" and last.get("role") == "user"):
+        errors.append("the last item is not the user's message")
+    return errors
+
+
+# One turn of the chat, as server-sent events (see llm.run_turn); the
+# page keeps the conversation and sends all of it every time.
+@app.post("/api/chat")
+def chat(body: dict = Body(...)):
+    items = body.get("input")
+    problems = chat_problems(items)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+
+    def events():
+        try:
+            for event in llm.run_turn(items):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            log.exception("chat turn failed")
+            yield f"data: {json.dumps({'type': 'error', 'message': f'the server failed: {e}'})}\n\n"
+
+    # The events must reach the page as they come, not when the turn ends.
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/metro/lines")
