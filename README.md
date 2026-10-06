@@ -28,6 +28,67 @@ The chat (POST /api/chat, web/llm.py) queries the database as
 `OPENAI_MODEL` (default gpt-6.1-sol), `OPENAI_REASONING_EFFORT` (medium)
 and `LLM_DATABASE_URL` change the model and the login.
 
+## Deployment
+
+https://sofia.novellabs.ai runs on a Mac mini (M4) at home: nginx in
+front, uvicorn and the live poller under launchd (`deploy/`), PostgreSQL
+and the NAS on the same machine and network. To update it:
+
+    deploy/update.sh
+
+Setting it up from scratch, in the repository's directory:
+
+1. Packages, and keep the machine awake and coming back after a power
+   cut. The services are LaunchAgents, so they start at login: turn on
+   automatic login (System Settings → Users & Groups).
+
+       brew install postgis python@3.12     # brings its postgresql@NN
+       brew services start postgresql@NN    # the one `brew info postgis` names
+       sudo pmset -a sleep 0 disksleep 0 autorestart 1
+       python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+       mkdir -p logs
+
+2. The NAS, mounted on demand by autofs so that it is there for the
+   jobs with nobody logged in to Finder. Add `/-  auto_smb  -nosuid` to
+   `/etc/auto_master`, then (URL-encode special characters in the
+   password):
+
+       echo '/System/Volumes/Data/mnt/urbandata -fstype=smbfs ://<user>:<password>@slavi-nas.local/urbandata' | sudo tee /etc/auto_smb
+       sudo chmod 600 /etc/auto_smb && sudo automount -cv
+       ln -s /System/Volumes/Data/mnt/urbandata data
+
+   macOS updates may reset `/etc/auto_master`; check it after one.
+
+3. The database, copied from the old machine. Brew's superuser is your
+   own account, not postgres. The roles first, so that the dump's owners
+   and grants apply:
+
+       createuser urbanuser -P && createuser urban_llm -P
+       createdb -O urbanuser urbandata
+
+   Then stop the old machine's poller (its crontab line), dump there
+   and restore here; the live data has a gap for as long as this takes.
+
+       sudo -u postgres pg_dump -Fc urbandata > data/urbandata.dump       # old machine
+       pg_restore -j 8 -d urbandata data/urbandata.dump                   # Mac mini
+       psql -v ON_ERROR_STOP=1 -d urbandata -f db/app/llm_role.sql        # role settings are not in the dump
+
+   Both passwords go into `~/.pgpass` (see above) and the OpenAI key
+   into `.env` (`export OPENAI_API_KEY=...`).
+
+4. The services, with this directory's path filled in (launchd does
+   not expand `~`). Logs go to `logs/web.log` and `logs/live.log`.
+
+       for f in deploy/com.sofia.*.plist; do
+           sed "s|__REPO__|$PWD|g" $f > ~/Library/LaunchAgents/${f##*/}
+           launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/${f##*/}
+       done
+
+5. nginx (already serving the other sites, with the shared certificate):
+
+       ln -s $PWD/deploy/nginx-sofia.conf /opt/homebrew/etc/nginx/servers/sofia.conf
+       sudo nginx -t && sudo nginx -s reload
+
 ## Principles for agents
 
 - **Cite the source.** Every finding names the datasets (and layers) it is
