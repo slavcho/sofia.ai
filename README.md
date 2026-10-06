@@ -17,6 +17,17 @@ The live transit feeds are fetched every minute by cron (`crontab -e`):
 
     * * * * * cd ~/work/ai.sofia && flock -n /tmp/poll_live.lock python3 poll_live.py >> logs/live.log 2>&1
 
+The chat (POST /api/chat, web/llm.py) queries the database as
+`urban_llm`, a login that can only read, and asks OpenAI's Responses API:
+
+    sudo -u postgres psql -v ON_ERROR_STOP=1 -d urbandata -f db/app/llm_role.sql
+    sudo -u postgres psql -d urbandata -c '\password urban_llm'
+    echo '127.0.0.1:5432:urbandata:urban_llm:<password>' >> ~/.pgpass && chmod 600 ~/.pgpass
+    export OPENAI_API_KEY=...     # in the web server's environment
+
+`OPENAI_MODEL` (default gpt-6.1-sol), `OPENAI_REASONING_EFFORT` (medium)
+and `LLM_DATABASE_URL` change the model and the login.
+
 ## Principles for agents
 
 - **Cite the source.** Every finding names the datasets (and layers) it is
