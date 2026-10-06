@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Back up the live and app schemas to the NAS every night at 04:00
+  (deploy/backup.sh). A night the Mac was asleep or off runs at the
+  next wake. Replace __REPO__ as in com.sofia.web.plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sofia.backup</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/deploy/backup.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__REPO__/logs/backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/logs/backup.log</string>
+</dict>
+</plist>
