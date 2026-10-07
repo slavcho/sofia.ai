@@ -391,6 +391,7 @@ const getJSON = url => fetch(url).then(r => { if (!r.ok) throw new Error(url + '
 const map = new maplibregl.Map({
   container: 'map',
   center: [23.32, 42.69], zoom: 11.5,
+  attributionControl: { compact: true },
   style: {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
@@ -402,6 +403,9 @@ const map = new maplibregl.Map({
   }
 });
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
+// Compact attribution starts unfolded; fold it to the "i" button until clicked.
+map.once('load', () =>
+  map.getContainer().querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show'));
 // The chat needs none of the data, so it works while the map loads.
 bindChat();
 map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }));
