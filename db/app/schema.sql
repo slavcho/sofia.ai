@@ -1,7 +1,7 @@
 -- What the people using the site add to it, kept apart from city.*, which
 -- the db/city scripts rebuild from the sources.
 --
--- Apply with:  psql -v ON_ERROR_STOP=1 -d urbandata -f db/app/schema.sql
+-- Apply with: psql -v ON_ERROR_STOP=1 -d urbandata -U urbanuser -f db/app/schema.sql
 -- Safe to re-run: every object is created only if it is missing.
 
 CREATE SCHEMA IF NOT EXISTS app;
