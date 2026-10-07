@@ -1,6 +1,6 @@
 """Checks on how the chat page shows each tool's result (toolResult in
-web/static/chat.js), run in node against a minimal stand-in for the DOM;
-skipped without node."""
+web/static/chat.js), run in node against a minimal stand-in for the DOM,
+and on the id it gives each chat; skipped without node."""
 
 import json
 import shutil
@@ -101,6 +101,40 @@ class ToolResultTest(unittest.TestCase):
         r = self.results["error"]
         self.assertEqual(r["status"], "error")
         self.assertIn("failed", r["classes"])
+
+
+# The id the page sends with every question (chat_id, kept with it in
+# app.questions): a UUID where the browser can make one, which needs a
+# secure context; none otherwise, which the server takes too.
+UUID_SCRIPT = r"""
+const vm = require('vm'), fs = require('fs');
+const ids = {};
+for (const [name, globals] of Object.entries({ with: { crypto: require('crypto') }, without: {} })) {
+  const context = vm.createContext({ console, ...globals });
+  vm.runInContext(fs.readFileSync(process.argv.at(-1), 'utf8'), context);
+  ids[name] = [vm.runInContext('chatUuid', context), vm.runInContext('newChatUuid()', context)];
+}
+console.log(JSON.stringify(ids));
+"""
+
+
+@unittest.skipUnless(shutil.which("node"), "no node")
+class ChatUuidTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        run = subprocess.run(["node", "-e", UUID_SCRIPT, "--", str(CHAT_JS)],
+                             capture_output=True, text=True, timeout=30)
+        if run.returncode:
+            raise AssertionError(run.stderr)
+        cls.ids = json.loads(run.stdout)
+
+    def test_a_new_uuid_for_every_chat(self):
+        first, second = self.ids["with"]
+        self.assertRegex(first, r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+        self.assertNotEqual(first, second)
+
+    def test_none_without_a_secure_context(self):
+        self.assertEqual(self.ids["without"], [None, None])
 
 
 if __name__ == "__main__":

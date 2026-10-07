@@ -18,6 +18,11 @@
 
 // chatId changes with every new chat, so a turn stopped by it is not kept.
 let chatItems = [], chatAbort = null, chatId = 0;
+// Sent with every question, so the server can tell which ones were asked
+// in the same chat (app.questions). randomUUID needs a secure context
+// (https or localhost); without one the questions go without it.
+const newChatUuid = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null;
+let chatUuid = newChatUuid();
 let chatViews = {}, chatShown = null, chatPopup = null;
 const CHAT_COLOR = '#e6550d';
 
@@ -135,7 +140,7 @@ async function askChat(question) {
   try {
     const r = await fetch('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: turn, catalog: chatCatalog() }), signal: chatAbort.signal });
+      body: JSON.stringify({ input: turn, catalog: chatCatalog(), chat_id: chatUuid }), signal: chatAbort.signal });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `the server answered ${r.status}`);
     answer.innerHTML = '';
     for await (const e of chatEvents(r)) {
@@ -284,6 +289,7 @@ function hideChatView() {
 function newChat() {
   if (chatAbort) chatAbort.abort();
   chatId++;
+  chatUuid = newChatUuid();
   chatItems = [];
   chatViews = {};
   hideChatView();
