@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from pathlib import Path
 
 import psycopg
@@ -179,23 +180,84 @@ def catalog_problems(catalog) -> list[str]:
     return errors
 
 
+def chat_id_problems(chat_id) -> list[str]:
+    """The page's id for its conversation, which groups the questions
+    kept in app.questions; optional."""
+    if chat_id is None:
+        return []
+    try:
+        uuid.UUID(chat_id)
+        return []
+    except (TypeError, ValueError, AttributeError):
+        return ["chat_id is not a UUID"]
+
+
+def question_text(item: dict) -> str:
+    """The text of a user's message: its content is either a string or a
+    list of parts."""
+    content = item.get("content")
+    if isinstance(content, str):
+        return content
+    return "\n".join(p["text"] for p in content or []
+                     if isinstance(p, dict) and isinstance(p.get("text"), str))
+
+
+# Keeping the questions (app.questions) must never cost an answer, so a
+# failure is only logged.
+def keep_question(items: list[dict], chat_id: str | None) -> int | None:
+    turn = sum(1 for i in items if i.get("type", "message") == "message" and i.get("role") == "user")
+    try:
+        with psycopg.connect(DSN, connect_timeout=3) as conn:
+            (id,) = conn.execute("""INSERT INTO app.questions (chat_id, turn, question)
+                                    VALUES (%s, %s, %s) RETURNING id""",
+                                 (chat_id, turn, question_text(items[-1]))).fetchone()
+        return id
+    except Exception as e:
+        log.warning("the question was not kept: %s", e)
+        return None
+
+
+def keep_outcome(id: int | None, outcome: str, error: str | None):
+    if id is None:
+        return
+    try:
+        with psycopg.connect(DSN, connect_timeout=3) as conn:
+            conn.execute("UPDATE app.questions SET outcome = %s, error = %s WHERE id = %s",
+                         (outcome, error, id))
+    except Exception as e:
+        log.warning("the outcome of question %s was not kept: %s", id, e)
+
+
 # One turn of the chat, as server-sent events (see llm.run_turn); the
 # page keeps the conversation and sends all of it every time.
 @app.post("/api/chat")
 def chat(body: dict = Body(...)):
     items = body.get("input")
     catalog = body.get("catalog")
-    problems = chat_problems(items) + (catalog_problems(catalog) if catalog is not None else [])
+    chat_id = body.get("chat_id")
+    problems = (chat_problems(items) + (catalog_problems(catalog) if catalog is not None else [])
+                + chat_id_problems(chat_id))
     if problems:
         raise HTTPException(400, "; ".join(problems))
+    question = keep_question(items, chat_id)
 
     def events():
+        # Stopped unless the turn says otherwise: the page went away, or
+        # the turn ended without saying how.
+        outcome, error = "stopped", None
         try:
             for event in llm.run_turn(items, catalog=catalog):
+                if event["type"] == "done":
+                    outcome = "answered"
+                elif event["type"] == "error" and outcome != "failed":
+                    outcome, error = "failed", event.get("message")
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             log.exception("chat turn failed")
-            yield f"data: {json.dumps({'type': 'error', 'message': f'the server failed: {e}'})}\n\n"
+            outcome, error = "failed", f"the server failed: {e}"
+            yield f"data: {json.dumps({'type': 'error', 'message': error})}\n\n"
+        finally:
+            keep_outcome(question, outcome, error)
 
     # The events must reach the page as they come, not when the turn ends.
     return StreamingResponse(events(), media_type="text/event-stream",

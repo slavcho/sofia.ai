@@ -4,12 +4,14 @@ schema applied (db/app/schema.sql), are skipped without it."""
 import json
 import os
 import unittest
+import uuid
 from unittest import mock
 
 import psycopg
 from fastapi.testclient import TestClient
 
-from web.app import BUILTIN_FOCUSES, app, chat_problems, focus_problems, merge_focuses, stored_focuses
+from web.app import (BUILTIN_FOCUSES, app, chat_problems, focus_problems, merge_focuses, question_text,
+                     stored_focuses)
 
 DSN = os.environ.get("DATABASE_URL", "host=127.0.0.1 dbname=urbandata user=urbanuser")
 
@@ -149,8 +151,10 @@ class ChatProblemsTest(unittest.TestCase):
 class ChatEndpointTest(unittest.TestCase):
     INPUT = {"input": [{"role": "user", "content": "How many metro lines?"}]}
 
+    # The questions are not kept here (see KeptQuestionsTest), so that
+    # these tests leave nothing in the database.
     def post(self, body, turn):
-        with mock.patch("web.app.llm.run_turn", turn):
+        with mock.patch("web.app.llm.run_turn", turn), mock.patch("web.app.keep_question", return_value=None):
             return TestClient(app).post("/api/chat", json=body)
 
     def test_streams_the_events(self):
@@ -191,6 +195,84 @@ class ChatEndpointTest(unittest.TestCase):
                         {"area_kinds": [1]}, {"layers": [{"key": "a", "label": "x" * 20_000}]}]:
             r = self.post({**self.INPUT, "catalog": catalog}, None)
             self.assertEqual(r.status_code, 400, catalog)
+
+    def test_a_bad_chat_id_is_refused(self):
+        for chat_id in ["x", 1, "'; DROP TABLE app.questions; --"]:
+            r = self.post({**self.INPUT, "chat_id": chat_id}, None)
+            self.assertEqual(r.status_code, 400, chat_id)
+
+    def test_answers_even_if_the_question_cannot_be_kept(self):
+        def turn(items, catalog=None):
+            yield {"type": "done"}
+        with mock.patch("web.app.llm.run_turn", turn), \
+             mock.patch("web.app.psycopg.connect", side_effect=psycopg.OperationalError("no database")):
+            r = TestClient(app).post("/api/chat", json=self.INPUT)
+        self.assertEqual(r.text, 'data: {"type": "done"}\n\n')
+
+
+class QuestionTextTest(unittest.TestCase):
+    def test_plain_and_in_parts(self):
+        self.assertEqual(question_text({"role": "user", "content": "Колко?"}), "Колко?")
+        self.assertEqual(question_text({"role": "user", "content": [
+            {"type": "input_text", "text": "How many"}, {"type": "input_text", "text": "lines?"}]}),
+            "How many\nlines?")
+        self.assertEqual(question_text({"role": "user", "content": [{"type": "input_image"}]}), "")
+
+
+class KeptQuestionsTest(unittest.TestCase):
+    """What /api/chat keeps in app.questions; skipped without it."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.conn = psycopg.connect(DSN, connect_timeout=3, autocommit=True)
+        except psycopg.OperationalError as e:
+            raise unittest.SkipTest(f"no database: {e}")
+        if cls.conn.execute("SELECT to_regclass('app.questions')").fetchone()[0] is None:
+            cls.conn.close()
+            raise unittest.SkipTest("app schema not applied")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+
+    def setUp(self):
+        self.chat_id = str(uuid.uuid4())
+
+    def tearDown(self):
+        self.conn.execute("DELETE FROM app.questions WHERE chat_id = %s", (self.chat_id,))
+
+    def post(self, items, *events):
+        def turn(items, catalog=None):
+            yield from events
+        with mock.patch("web.app.llm.run_turn", turn):
+            return TestClient(app).post("/api/chat", json={"input": items, "chat_id": self.chat_id})
+
+    def kept(self):
+        return self.conn.execute("""SELECT turn, question, outcome, error FROM app.questions
+                                     WHERE chat_id = %s ORDER BY id""", (self.chat_id,)).fetchall()
+
+    FIRST = {"role": "user", "content": "How many metro lines?"}
+    ANSWER = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Four."}]}
+    SECOND = {"role": "user", "content": "And stations?"}
+
+    def test_each_question_once_with_its_turn_and_outcome(self):
+        self.post([self.FIRST], {"type": "done"})
+        self.post([self.FIRST, self.ANSWER, self.SECOND], {"type": "error", "message": "the model stopped"})
+        self.assertEqual(self.kept(), [(1, "How many metro lines?", "answered", None),
+                                       (2, "And stations?", "failed", "the model stopped")])
+
+    def test_a_failure_of_the_server(self):
+        def turn(items, catalog=None):
+            yield {"type": "text", "delta": "Fo"}
+            raise RuntimeError("boom")
+        with mock.patch("web.app.llm.run_turn", turn):
+            TestClient(app).post("/api/chat", json={"input": [self.FIRST], "chat_id": self.chat_id})
+        self.assertEqual(self.kept(), [(1, "How many metro lines?", "failed", "the server failed: boom")])
+
+    def test_a_turn_that_never_ends_is_stopped(self):
+        self.post([self.FIRST], {"type": "text", "delta": "Fo"})
+        self.assertEqual(self.kept(), [(1, "How many metro lines?", "stopped", None)])
 
 
 if __name__ == "__main__":
