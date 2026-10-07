@@ -35,3 +35,12 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public, urban, city, gtfs, live, app TO urb
 -- too.
 ALTER DEFAULT PRIVILEGES FOR ROLE urbanuser IN SCHEMA public, urban, city, gtfs, live, app
     GRANT SELECT ON TABLES TO urban_llm;
+
+-- Except what people asked in the chat (app.questions): the grant above
+-- takes in every table, so it is taken back each time.
+DO $$
+BEGIN
+    IF to_regclass('app.questions') IS NOT NULL THEN
+        REVOKE ALL ON app.questions FROM urban_llm;
+    END IF;
+END $$;

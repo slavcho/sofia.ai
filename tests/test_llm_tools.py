@@ -274,6 +274,11 @@ class ReadOnlyLoginTest(unittest.TestCase):
                 self.conn.execute("SET TRANSACTION READ WRITE")
                 self.conn.execute("DELETE FROM app.focuses")
 
+    def test_cannot_read_the_questions(self):
+        # They are what other people asked; the model must not show them.
+        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+            self.conn.execute("SELECT * FROM app.questions")
+
     def test_run_sql_uses_it(self):
         self.assertEqual(run_sql("SELECT current_user AS u")["rows"], [["urban_llm"]])
 

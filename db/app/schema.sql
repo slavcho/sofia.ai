@@ -21,3 +21,30 @@ CREATE TABLE IF NOT EXISTS focuses (
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS focuses_owner_idx ON focuses (owner);
+
+-- The questions asked in the chat (POST /api/chat), one row per turn, to
+-- see what people want to know and where the answers fail. The page keeps
+-- the conversation and sends all of it every time; only its last message,
+-- the new question, is kept here.
+CREATE TABLE IF NOT EXISTS questions (
+    id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    chat_id  uuid,                                -- the page's conversation; NULL from a page that sends none
+    turn     integer NOT NULL CHECK (turn >= 1),  -- 1 for the first question of a chat
+    question text NOT NULL,
+    asked_at timestamptz NOT NULL DEFAULT now(),
+    -- NULL while the turn runs, or if the server stopped before it ended
+    outcome  text CHECK (outcome IN ('answered', 'failed', 'stopped')),
+    error    text                                 -- why it failed
+);
+CREATE INDEX IF NOT EXISTS questions_asked_at_idx ON questions (asked_at);
+CREATE INDEX IF NOT EXISTS questions_chat_id_idx ON questions (chat_id, turn);
+
+-- What other people asked is not for the model (urban_llm, see
+-- llm_role.sql) to read and repeat; its default privileges gave it this
+-- table when it was created.
+DO $$
+BEGIN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'urban_llm') THEN
+        REVOKE ALL ON questions FROM urban_llm;
+    END IF;
+END $$;
